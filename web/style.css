@@ -1,0 +1,169 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0f1117;
+  color: #f4f4f5;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.app {
+  max-width: 1050px;
+  margin: 0 auto;
+  padding: 24px;
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 16px;
+}
+
+.topbar,
+.controls,
+.chat,
+.composer {
+  border: 1px solid #2b3040;
+  background: #171a23;
+  border-radius: 18px;
+}
+
+.topbar {
+  padding: 18px 22px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.top-actions {
+  display: flex;
+  gap: 10px;
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 30px;
+  letter-spacing: 0.02em;
+}
+
+p {
+  margin: 0;
+  color: #aab1c2;
+}
+
+.controls {
+  padding: 14px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: #aab1c2;
+  font-size: 14px;
+}
+
+input,
+textarea {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid #303647;
+  background: #10131a;
+  color: #f4f4f5;
+  padding: 13px;
+  font-size: 15px;
+}
+
+.chat {
+  padding: 18px;
+  overflow-y: auto;
+  min-height: 420px;
+}
+
+.message {
+  padding: 14px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+  border: 1px solid #2b3040;
+}
+
+.message.user {
+  background: #1f2937;
+}
+
+.message.bot {
+  background: #161922;
+}
+
+.label {
+  font-size: 13px;
+  color: #aab1c2;
+  margin-bottom: 8px;
+  font-weight: 800;
+}
+
+.body {
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.composer {
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  border: 0;
+  border-radius: 14px;
+  background: #f4f4f5;
+  color: #0f1117;
+  font-weight: 900;
+  padding: 0 22px;
+  cursor: pointer;
+}
+
+button:hover {
+  opacity: 0.9;
+}
+
+.sources {
+  margin-top: 12px;
+  color: #c8ceda;
+}
+
+.source {
+  border-top: 1px solid #2b3040;
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+pre {
+  white-space: pre-wrap;
+  background: #0f1117;
+  padding: 10px;
+  border-radius: 10px;
+  overflow-x: auto;
+  color: #d7dbe5;
+  max-height: 260px;
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .composer {
+    grid-template-columns: 1fr;
+  }
+
+  button {
+    padding: 12px 18px;
+  }
+}
