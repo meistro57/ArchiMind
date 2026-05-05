@@ -58,6 +58,7 @@ In short:
 - **Memory/cache:** Redis (`internal/memory/redis.go`)
 - **RAG logic:** Source-aware prompt assembly (`internal/rag/`)
 - **UI:** Static browser app in `web/`
+- **Background reports:** Reporter agent (`internal/reporter/agent.go`) using Qdrant + OpenRouter
 
 ---
 
@@ -188,7 +189,30 @@ Response:
     }
   ]
 }
-GET /api/health
+```
+
+### `POST /api/report`
+
+Starts asynchronous report generation.
+
+Request:
+
+```json
+{
+  "topic": "history of retrieval architecture"
+}
+```
+
+Response:
+
+```json
+{
+  "message": "report generation started",
+  "output_path": "reports/history_of_retrieval_architecture_20260505_120000.md"
+}
+```
+
+### `GET /api/health`
 
 Returns service status.
 
@@ -222,6 +246,17 @@ Philosophy
 
 ArchiMind is not trying to be an all-knowing oracle.
 
+- `main.go` - wiring for config, providers, Redis, Qdrant, RAG engine, HTTP server
+- `internal/config/` - environment loading and validation
+- `internal/server/` - HTTP handlers + static web serving
+- `internal/rag/` - retrieval + prompt assembly + source extraction
+- `internal/qdrant/` - Qdrant API client (collection info, vector size, query)
+- `internal/embed/` - embedding provider implementations
+- `internal/llm/` - chat provider interface + OpenRouter chat implementation
+- `internal/memory/` - Redis chat history and cache storage
+- `internal/reporter/` - background report generation agent
+- `web/` - browser client
+
 It is a retrieval instrument: part archive lantern, part source clerk, part suspicious little analyst with a clipboard.
 
 Its job is to help you ask better questions of your own knowledge systems while keeping the line visible between:
@@ -232,3 +267,11 @@ What is speculative
 What is unsupported
 
 That line matters. Without it, every archive eventually becomes soup with footnotes.
+
+- Chat history is stored per session key: `chat:<session_id>:history`.
+- `CHAT_HISTORY_TURNS` trims retained turns.
+- History key expiration is currently fixed to **24h** in `SaveTurn`; cache TTL uses `REDIS_TTL_SECONDS`.
+- Embedding and Qdrant result caching include provider/model/vector names in cache keys to avoid collisions across provider/model changes.
+- On startup, the app attempts to fetch Qdrant vector size for configured `QDRANT_COLLECTION` + `QDRANT_VECTOR_NAME` and logs dimension mismatch warnings later in RAG execution.
+- If no retrieval hits are returned, the assistant responds with a clear "could not find anything relevant" message.
+- `/api/report` runs in a goroutine and writes markdown reports to `reports/<topic>_<timestamp>.md`.

@@ -374,7 +374,7 @@ func (e *Engine) getQdrantResults(ctx context.Context, collection string, questi
 		}
 	}
 
-	points, err := e.qdr.Query(ctx, collection, vector)
+	points, err := e.qdr.Query(ctx, collection, vector, e.cfg.QdrantTopK)
 	if err != nil {
 		return nil, err
 	}

@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"archimind/internal/config"
+	"archimind/internal/embed"
+	"archimind/internal/llm"
 	"archimind/internal/qdrant"
 	"archimind/internal/rag"
+	"archimind/internal/reporter"
 )
 
 type Server struct {
@@ -36,6 +39,15 @@ type ChatResponse struct {
 	Sources []rag.Source `json:"sources"`
 }
 
+type ReportStartRequest struct {
+	Topic string `json:"topic"`
+}
+
+type ReportStartResponse struct {
+	Message    string `json:"message"`
+	OutputPath string `json:"output_path"`
+}
+
 func New(cfg config.Config, ragEngine *rag.Engine, qdrantClient *qdrant.Client, logger *log.Logger) *Server {
 	s := &Server{
 		cfg:    cfg,
@@ -48,6 +60,7 @@ func New(cfg config.Config, ragEngine *rag.Engine, qdrantClient *qdrant.Client, 
 
 	mux.Handle("/", http.FileServer(http.Dir(filepath.Join(".", "web"))))
 	mux.HandleFunc("/api/chat", s.handleChat)
+	mux.HandleFunc("/api/report", s.handleReport)
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/collection", s.handleCollection)
 
@@ -115,6 +128,57 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	var req ReportStartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	req.Topic = strings.TrimSpace(req.Topic)
+	if req.Topic == "" {
+		writeError(w, http.StatusBadRequest, "topic is required")
+		return
+	}
+
+	timestamp := time.Now().UTC().Format("20060102_150405")
+	outputPath := filepath.Join("reports", sanitizeReportTopic(req.Topic)+"_"+timestamp+".md")
+
+	reportAgent := reporter.NewAgent(
+		s.cfg,
+		s.qdr,
+		llm.NewOpenRouterProvider(s.cfg),
+		buildReportEmbedder(s.cfg),
+		s.logger,
+	)
+
+	go func(topic string, path string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+
+		err := reportAgent.Generate(ctx, reporter.ReportRequest{
+			Topic:      topic,
+			TokenLimit: 6000,
+			OutputPath: path,
+		})
+		if err != nil {
+			s.logger.Printf("report generation error topic=%q path=%s err=%v", topic, path, err)
+			return
+		}
+		s.logger.Printf("report generation finished topic=%q path=%s", topic, path)
+	}(req.Topic, outputPath)
+
+	writeJSON(w, ReportStartResponse{
+		Message:    "report generation started",
+		OutputPath: outputPath,
+	})
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"status": "ok",
@@ -146,6 +210,39 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error": message,
 	})
+}
+
+func buildReportEmbedder(cfg config.Config) embed.Provider {
+	if strings.ToLower(strings.TrimSpace(cfg.EmbedProvider)) == "openrouter" {
+		return embed.NewOpenRouterProvider(cfg)
+	}
+	return embed.NewOllamaProvider(cfg)
+}
+
+func sanitizeReportTopic(topic string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(topic))
+	if trimmed == "" {
+		return "report"
+	}
+
+	slug := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		case r == ' ' || r == '-' || r == '_':
+			return '_'
+		default:
+			return -1
+		}
+	}, trimmed)
+
+	slug = strings.Trim(slug, "_")
+	if slug == "" {
+		return "report"
+	}
+	return slug
 }
 
 func cfgStrictness(value string) string {
