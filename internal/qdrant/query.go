@@ -32,7 +32,7 @@ type queryResponse struct {
 	Time   any `json:"time"`
 }
 
-func (c *Client) Query(ctx context.Context, collection string, vector []float64) ([]SearchPoint, error) {
+func (c *Client) Query(ctx context.Context, collection string, vector []float64, limit int) ([]SearchPoint, error) {
 	if collection == "" {
 		collection = c.cfg.QdrantCollection
 	}
@@ -41,10 +41,14 @@ func (c *Client) Query(ctx context.Context, collection string, vector []float64)
 		return nil, fmt.Errorf("qdrant collection is missing")
 	}
 
+	if limit <= 0 {
+		limit = c.cfg.QdrantTopK
+	}
+
 	body := queryRequest{
 		Query:       vector,
 		Using:       c.cfg.QdrantVectorName,
-		Limit:       c.cfg.QdrantTopK,
+		Limit:       limit,
 		WithPayload: true,
 		WithVector:  false,
 	}

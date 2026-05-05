@@ -66,6 +66,12 @@ go build ./...
    - Save assistant turn to Redis
 4. Response includes `answer` and `sources` to UI.
 
+Background reporting flow:
+
+1. `internal/server/server.go` receives `POST /api/report`.
+2. Server creates `reporter.Agent` and launches `Generate(...)` in a goroutine.
+3. `Generate` embeds topic, queries Qdrant with high limit, assembles token-bounded context, synthesizes markdown via chat provider, and writes report file.
+
 ## Key files and responsibilities
 
 - `main.go`
@@ -77,7 +83,7 @@ go build ./...
 - `internal/rag/rag.go`
   - RAG orchestration, retrieval signal heuristics, prompt construction
 - `internal/qdrant/query.go`
-  - Vector query to Qdrant `/collections/{name}/points/query`
+  - Vector query to Qdrant `/collections/{name}/points/query` with caller-provided limit
 - `internal/qdrant/collections.go`
   - Collection info + named vector size lookup
 - `internal/memory/redis.go`
@@ -86,6 +92,8 @@ go build ./...
   - `ollama.go` and `openrouter.go` embedding providers
 - `internal/llm/openrouter.go`
   - Chat completion provider
+- `internal/reporter/agent.go`
+  - Background report synthesis from Qdrant retrieval context
 - `web/app.js`
   - Front-end chat interactions and source rendering
 
@@ -149,6 +157,16 @@ From `internal/config/config.go`:
   - `sources` array of `rag.Source`:
     - `index`, `score`, `title`, `page`, `chunk`, `source`, `text`
 
+### `/api/report`
+
+- Request JSON:
+  - `topic` (required)
+- Response JSON:
+  - `message` (`report generation started`)
+  - `output_path` (relative markdown path under `reports/`)
+- Behavior:
+  - Runs asynchronously in goroutine and logs completion/failure.
+
 ### `/api/health`
 
 - Returns status JSON (`status`, `app`).
@@ -171,6 +189,7 @@ From `internal/config/config.go`:
 - Chat history expiration is fixed to `24*time.Hour` in `SaveTurn` (not using `REDIS_TTL_SECONDS`).
 - Cache entries for embeddings/Qdrant use `REDIS_TTL_SECONDS`.
 - Qdrant query uses `with_payload=true` and `with_vector=false`.
+- Qdrant query call now accepts an explicit `limit`; chat uses `QDRANT_TOP_K`, reporter uses a higher fixed limit.
 - Named-vector dimension validation happens at startup (`VectorSize`) and again before query result use.
 - If no points are returned, `Ask` returns a fixed fallback sentence and empty sources.
 - `web/app.js` renders source snippets in a `<details>` section; long answers/sources should remain readable plain text.
@@ -181,14 +200,17 @@ From `internal/config/config.go`:
 2. For RAG changes, inspect both:
    - `internal/rag/rag.go`
    - `internal/server/server.go` (extra logging/debug signal usage)
-3. Keep API response fields backward compatible unless user asks for breaking changes.
-4. Run after each meaningful change:
+3. For reporter changes, inspect:
+   - `internal/reporter/agent.go`
+   - `internal/server/server.go` (`/api/report` handler)
+4. Keep API response fields backward compatible unless user asks for breaking changes.
+5. Run after each meaningful change:
 
 ```bash
 go test ./...
 ```
 
-5. Final validation before handoff:
+6. Final validation before handoff:
 
 ```bash
 gofmt -w .

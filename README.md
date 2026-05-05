@@ -9,6 +9,7 @@ ArchiMind is a Go web chatbot that answers questions against a Qdrant collection
 - **Vector retrieval:** Qdrant (`internal/qdrant/`)
 - **Memory/cache:** Redis (`internal/memory/redis.go`)
 - **UI:** Static browser app in `web/`
+- **Background reports:** Reporter agent (`internal/reporter/agent.go`) using Qdrant + OpenRouter
 
 ## Quick start
 
@@ -110,6 +111,27 @@ Response:
 }
 ```
 
+### `POST /api/report`
+
+Starts asynchronous report generation.
+
+Request:
+
+```json
+{
+  "topic": "history of retrieval architecture"
+}
+```
+
+Response:
+
+```json
+{
+  "message": "report generation started",
+  "output_path": "reports/history_of_retrieval_architecture_20260505_120000.md"
+}
+```
+
 ### `GET /api/health`
 
 Returns service status.
@@ -128,6 +150,7 @@ Returns raw Qdrant collection info (or configured default collection if `name` o
 - `internal/embed/` - embedding provider implementations
 - `internal/llm/` - chat provider interface + OpenRouter chat implementation
 - `internal/memory/` - Redis chat history and cache storage
+- `internal/reporter/` - background report generation agent
 - `web/` - browser client
 
 ## Notes and gotchas
@@ -138,3 +161,4 @@ Returns raw Qdrant collection info (or configured default collection if `name` o
 - Embedding and Qdrant result caching include provider/model/vector names in cache keys to avoid collisions across provider/model changes.
 - On startup, the app attempts to fetch Qdrant vector size for configured `QDRANT_COLLECTION` + `QDRANT_VECTOR_NAME` and logs dimension mismatch warnings later in RAG execution.
 - If no retrieval hits are returned, the assistant responds with a clear "could not find anything relevant" message.
+- `/api/report` runs in a goroutine and writes markdown reports to `reports/<topic>_<timestamp>.md`.
