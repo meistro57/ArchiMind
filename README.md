@@ -21,6 +21,7 @@
   <img src="https://img.shields.io/badge/Qdrant-Vector_Search-DC244C?style=for-the-badge" alt="Qdrant" />
   <img src="https://img.shields.io/badge/OpenRouter-LLM_Provider-7C3AED?style=for-the-badge" alt="OpenRouter" />
   <img src="https://img.shields.io/badge/Redis-Memory_&_Cache-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis" />
+  <img src="https://img.shields.io/badge/Version-0.6.0-111827?style=for-the-badge" alt="Version 0.6.0" />
 </p>
 
 ---
@@ -215,6 +216,16 @@ Response:
 ### `GET /api/health`
 
 Returns service status.
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "app": "ArchiMind",
+  "app_version": "0.6.0"
+}
+```
 
 GET /api/collection?name=<collection>
 

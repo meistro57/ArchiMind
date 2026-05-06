@@ -8,10 +8,18 @@ import (
 	"net/http"
 )
 
+type CollectionVector struct {
+	Size     int    `json:"size"`
+	Distance string `json:"distance"`
+}
+
 type CollectionInfo struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Raw    any    `json:"raw"`
+	Name                  string                      `json:"name"`
+	Status                string                      `json:"status"`
+	ConfiguredVector      string                      `json:"configured_vector"`
+	ConfiguredVectorFound bool                        `json:"configured_vector_found"`
+	Vectors               map[string]CollectionVector `json:"vectors"`
+	Raw                   any                         `json:"raw"`
 }
 
 type vectorConfig struct {
@@ -68,11 +76,62 @@ func (c *Client) CollectionInfo(ctx context.Context, collection string) (*Collec
 		return nil, fmt.Errorf("qdrant collection info returned HTTP %d", resp.StatusCode)
 	}
 
+	vectors := parseVectors(raw)
+	configuredVector := c.cfg.QdrantVectorName
+	configuredVectorFound := false
+	if configuredVector != "" {
+		_, configuredVectorFound = vectors[configuredVector]
+	} else if len(vectors) == 1 {
+		configuredVectorFound = true
+	}
+
 	return &CollectionInfo{
-		Name:   collection,
-		Status: "ok",
-		Raw:    raw,
+		Name:                  collection,
+		Status:                "ok",
+		ConfiguredVector:      configuredVector,
+		ConfiguredVectorFound: configuredVectorFound,
+		Vectors:               vectors,
+		Raw:                   raw,
 	}, nil
+}
+
+func parseVectors(raw any) map[string]CollectionVector {
+	vectors := map[string]CollectionVector{}
+
+	rawBytes, err := json.Marshal(raw)
+	if err != nil {
+		return vectors
+	}
+
+	var parsed collectionInfoResponse
+	if err := json.Unmarshal(rawBytes, &parsed); err != nil {
+		return vectors
+	}
+
+	if len(parsed.Result.Config.Params.Vectors) == 0 {
+		return vectors
+	}
+
+	var named map[string]vectorConfig
+	if err := json.Unmarshal(parsed.Result.Config.Params.Vectors, &named); err == nil {
+		for name, cfg := range named {
+			vectors[name] = CollectionVector{Size: cfg.Size, Distance: cfg.Distance}
+		}
+		if len(vectors) > 0 {
+			return vectors
+		}
+	}
+
+	var single vectorConfig
+	if err := json.Unmarshal(parsed.Result.Config.Params.Vectors, &single); err != nil {
+		return vectors
+	}
+
+	if single.Size > 0 {
+		vectors["default"] = CollectionVector{Size: single.Size, Distance: single.Distance}
+	}
+
+	return vectors
 }
 
 // VectorSize returns the expected vector dimension for a named vector in a Qdrant collection.
