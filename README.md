@@ -67,10 +67,7 @@ In short:
 
 <p align="center">
   <img
-    src="https://github.com/user-attachments/assets/f7016739-5658-43dd-9931-d8dc091d7556"
-    alt="ArchiMind interface screenshot"
-    width="900"
-  />
+    width="1138" height="1811" alt="image" src="https://github.com/user-attachments/assets/22ad90ac-376c-4591-8c85-6f2cc04030a9">
 </p>
 
 ---
