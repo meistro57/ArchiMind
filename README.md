@@ -133,8 +133,10 @@ ARCHIMIND_STRICTNESS=balanced
 3. Run:
 
 ```bash
-go run .
+./scripts/rebuild-and-start.sh
 ```
+
+(Alternative: `go run .`)
 
 4. Open:
 
@@ -149,6 +151,7 @@ gofmt -w .
 go test ./...
 go build ./...
 go mod tidy
+./scripts/rebuild-and-start.sh
 ```
 
 ## HTTP API
