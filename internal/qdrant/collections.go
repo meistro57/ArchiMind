@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 )
 
 type CollectionVector struct {
@@ -132,6 +134,106 @@ func parseVectors(raw any) map[string]CollectionVector {
 	}
 
 	return vectors
+}
+
+// ListCollections returns the names of all collections in Qdrant.
+func (c *Client) ListCollections(ctx context.Context) ([]string, error) {
+	names := []string{}
+	seenNames := map[string]struct{}{}
+	seenOffsets := map[string]struct{}{}
+	pageOffset := ""
+
+	for {
+		baseURL := fmt.Sprintf("%s/collections", c.cfg.QdrantURL)
+		parsedURL, err := url.Parse(baseURL)
+		if err != nil {
+			return nil, err
+		}
+
+		query := parsedURL.Query()
+		if pageOffset != "" {
+			query.Set("offset", pageOffset)
+		}
+		parsedURL.RawQuery = query.Encode()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsedURL.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+
+		if c.cfg.QdrantAPIKey != "" {
+			req.Header.Set("api-key", c.cfg.QdrantAPIKey)
+		}
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("qdrant returned HTTP %d listing collections", resp.StatusCode)
+		}
+
+		var body struct {
+			Result struct {
+				Collections []struct {
+					Name string `json:"name"`
+				} `json:"collections"`
+				NextPageOffset any `json:"next_page_offset"`
+			} `json:"result"`
+			NextPageOffset any `json:"next_page_offset"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("could not parse qdrant collections list: %w", err)
+		}
+		resp.Body.Close()
+
+		for _, col := range body.Result.Collections {
+			if col.Name == "" {
+				continue
+			}
+			if _, exists := seenNames[col.Name]; exists {
+				continue
+			}
+			seenNames[col.Name] = struct{}{}
+			names = append(names, col.Name)
+		}
+
+		nextOffset, hasNextOffset := parseCollectionsOffset(body.Result.NextPageOffset)
+		if !hasNextOffset || nextOffset == "" {
+			nextOffset, hasNextOffset = parseCollectionsOffset(body.NextPageOffset)
+		}
+		if !hasNextOffset || nextOffset == "" {
+			break
+		}
+		if _, seen := seenOffsets[nextOffset]; seen {
+			break
+		}
+		seenOffsets[nextOffset] = struct{}{}
+		pageOffset = nextOffset
+	}
+
+	return names, nil
+}
+
+func parseCollectionsOffset(value any) (string, bool) {
+	switch v := value.(type) {
+	case string:
+		return v, true
+	case json.Number:
+		return v.String(), true
+	case float64:
+		return strconv.FormatInt(int64(v), 10), true
+	case int:
+		return strconv.Itoa(v), true
+	case int64:
+		return strconv.FormatInt(v, 10), true
+	default:
+		return "", false
+	}
 }
 
 // VectorSize returns the expected vector dimension for a named vector in a Qdrant collection.

@@ -1,28 +1,25 @@
-<h1 align="center">ArchiMind</h1>
+# ArchiMind
 
-<p align="center">
-  <img
-    src="https://github.com/user-attachments/assets/d94afabb-29e8-4265-9b1e-a1e941031102"
-    alt="ArchiMind logo"
-    width="420"
-  />
-</p>
+ArchiMind is a Go-based retrieval app for querying Qdrant collections with source-cited answers.
 
-<p align="center">
-  <strong>A Go-powered RAG chatbot for querying Qdrant archives with OpenRouter, Redis memory, and source-aware synthesis.</strong>
-</p>
+## Stack
 
-<p align="center">
-  <em>Ask your collections. Trace the sources. Keep the speculation on a leash.</em>
-</p>
+- Go 1.22+
+- Qdrant (retrieval)
+- Redis (chat history + cache)
+- OpenRouter (chat model)
+- Ollama or OpenRouter (embeddings)
+- Static web UI (`web/`)
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go 1.22+" />
-  <img src="https://img.shields.io/badge/Qdrant-Vector_Search-DC244C?style=for-the-badge" alt="Qdrant" />
-  <img src="https://img.shields.io/badge/OpenRouter-LLM_Provider-7C3AED?style=for-the-badge" alt="OpenRouter" />
-  <img src="https://img.shields.io/badge/Redis-Memory_&_Cache-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis" />
-  <img src="https://img.shields.io/badge/Version-0.6.0-111827?style=for-the-badge" alt="Version 0.6.0" />
-</p>
+## Features
+
+- Source-cited chat with retrieval diagnostics
+- Answer modes: `normal`, `skeptical`, `synthesis`, `diagnostic`
+- Collection comparison (`/api/compare`)
+- Framework extraction (`/api/framework`)
+- Last-answer review (`/api/review/last`)
+- Session export to Markdown/JSON
+- Background report generation (`/api/report`)
 
 ---
 
@@ -92,42 +89,36 @@ It is meant to help explore archives without losing track of **what the sources 
 
 ## Quick start
 
-### 1) Configure environment
+1. Copy env template and set values:
 
-Set these variables. For local development, they can live in `.env`, loaded automatically by `godotenv` in `internal/config/config.go`.
+```bash
+cp .env.example .env
+```
 
-#### Core
+2. Required settings in `.env`:
 
 ```env
 APP_PORT=8090
 
-OPENROUTER_API_KEY=your_openrouter_key_here
+OPENROUTER_API_KEY=sk-or-...
 OPENROUTER_MODEL=deepseek/deepseek-r1
 OPENROUTER_SITE_URL=http://localhost:8090
 OPENROUTER_SITE_NAME=ArchiMind
-Qdrant
+
 QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=
-QDRANT_COLLECTION=your_collection_name
+QDRANT_COLLECTION=your_collection
 QDRANT_VECTOR_NAME=claims_vec
 QDRANT_TOP_K=8
-Embeddings
-
-Use OpenRouter embeddings:
 
 EMBED_PROVIDER=openrouter
 OPENROUTER_EMBED_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_EMBED_MODEL=openai/text-embedding-3-small
 
-Or use Ollama embeddings:
-
-EMBED_PROVIDER=ollama
+# or EMBED_PROVIDER=ollama
 OLLAMA_URL=http://localhost:11434
 OLLAMA_EMBED_MODEL=nomic-embed-text:latest
 
-The embedding model must match the vector dimensions used when the Qdrant collection was created. If Qdrant expects 1536, do not query it with a 768-dimension embedding model unless you enjoy being bonked by vector goblins.
-
-Redis / memory
 REDIS_ADDR=localhost:6379
 REDIS_PASSWORD=
 REDIS_DB=0
@@ -135,65 +126,116 @@ REDIS_TTL_SECONDS=3600
 CHAT_HISTORY_TURNS=12
 CACHE_EMBEDDINGS=true
 CACHE_QDRANT_RESULTS=true
-Prompt strictness
+
 ARCHIMIND_STRICTNESS=balanced
+```
 
-Accepted values:
+3. Run:
 
-strict
-balanced
-exploratory
-2) Run
-export GOTOOLCHAIN=local
+```bash
 go run .
+```
 
-Then open:
+4. Open:
 
+```text
 http://localhost:8090
-Development commands
-# Format
+```
+
+## Development commands
+
+```bash
 gofmt -w .
-
-# Dependency cleanup
-go mod tidy
-
-# Compile all packages
-go build ./...
-
-# Run tests
 go test ./...
-HTTP API
-POST /api/chat
+go build ./...
+go mod tidy
+```
+
+## HTTP API
+
+### `POST /api/chat`
 
 Request:
 
+```json
 {
   "session_id": "optional-session-id",
   "message": "your question",
-  "collection": "optional-collection-override"
+  "collection": "optional-collection-override",
+  "vector_name": "optional-vector-name",
+  "mode": "normal"
 }
+```
 
 Response:
 
+```json
 {
   "answer": "assistant response",
-  "sources": [
-    {
-      "index": 1,
-      "score": 0.95,
-      "title": "source title",
-      "source": "optional source",
-      "text": "retrieved text"
-    }
-  ]
+  "sources": [],
+  "themes": [],
+  "contradictions": [],
+  "source_influence": [],
+  "strong_claims": [],
+  "diagnostics": {
+    "grounded_claims": 0,
+    "speculative_claims": 0,
+    "unsupported_claims": 0,
+    "unsupported_leap_risk": "low",
+    "self_audit_checklist": []
+  }
+}
+```
+
+### `POST /api/compare`
+
+```json
+{
+  "session_id": "optional-session-id",
+  "message": "compare these",
+  "left_collection": "collection_a",
+  "right_collection": "collection_b",
+  "vector_name": "optional-vector",
+  "mode": "synthesis"
+}
+```
+
+### `POST /api/framework`
+
+```json
+{
+  "session_id": "optional-session-id",
+  "message": "extract a framework",
+  "collection": "optional-collection",
+  "vector_name": "optional-vector"
+}
+```
+
+### `POST /api/review/last`
+
+```json
+{
+  "session_id": "optional-session-id"
+}
+```
+
+### `POST /api/export/markdown`
+
+```json
+{
+  "session_id": "optional-session-id"
+}
+```
+
+### `POST /api/export/json`
+
+```json
+{
+  "session_id": "optional-session-id"
 }
 ```
 
 ### `POST /api/report`
-
-Starts asynchronous report generation.
-
-Request:
 
 ```json
 {
@@ -201,7 +243,7 @@ Request:
 }
 ```
 
-Response:
+Returns:
 
 ```json
 {
@@ -212,74 +254,33 @@ Response:
 
 ### `GET /api/health`
 
-Returns service status.
+Returns service status and app version.
 
-Response:
+### `GET /api/collection?name=<collection>`
 
-```json
-{
-  "status": "ok",
-  "app": "ArchiMind",
-  "app_version": "0.6.0"
-}
-```
+Returns raw collection info for a specific or default collection.
 
-GET /api/collection?name=<collection>
+### `GET /api/collections`
 
-Returns raw Qdrant collection info. If name is omitted, ArchiMind uses the configured default collection.
+Returns all collection names and discovered vector names.
+Collection listing follows Qdrant pagination (`next_page_offset`) so large installs and older/newer response shapes are fully enumerated.
 
-Project layout
+## Project structure
+
+```text
 ArchiMind/
 ├── main.go
 ├── internal/
-│   ├── config/      # Environment loading and validation
-│   ├── embed/       # Embedding providers
-│   ├── llm/         # Chat provider interface and OpenRouter implementation
-│   ├── memory/      # Redis chat history and cache storage
-│   ├── qdrant/      # Qdrant API client
-│   ├── rag/         # Retrieval, prompt assembly, source extraction
-│   ├── server/      # HTTP handlers and static web serving
-│   └── skills/      # Future skill registry
-└── web/             # Browser interface
-Notes and gotchas
-Chat history is stored per session key:
-chat:<session_id>:history
-CHAT_HISTORY_TURNS controls how many recent turns Redis keeps.
-Embedding cache keys include provider and model names to avoid stale vector reuse.
-Qdrant result cache keys include collection, vector name, provider, and model.
-Named-vector collections require QDRANT_VECTOR_NAME.
-On startup, ArchiMind attempts to fetch Qdrant vector dimensions and warns when embedding dimensions do not match.
-If no relevant retrieval hits are returned, ArchiMind gives a clear “could not find anything relevant” response.
-Philosophy
-
-ArchiMind is not trying to be an all-knowing oracle.
-
-- `main.go` - wiring for config, providers, Redis, Qdrant, RAG engine, HTTP server
-- `internal/config/` - environment loading and validation
-- `internal/server/` - HTTP handlers + static web serving
-- `internal/rag/` - retrieval + prompt assembly + source extraction
-- `internal/qdrant/` - Qdrant API client (collection info, vector size, query)
-- `internal/embed/` - embedding provider implementations
-- `internal/llm/` - chat provider interface + OpenRouter chat implementation
-- `internal/memory/` - Redis chat history and cache storage
-- `internal/reporter/` - background report generation agent
-- `web/` - browser client
-
-It is a retrieval instrument: part archive lantern, part source clerk, part suspicious little analyst with a clipboard.
-
-Its job is to help you ask better questions of your own knowledge systems while keeping the line visible between:
-
-What the sources say
-What the model can reasonably connect
-What is speculative
-What is unsupported
-
-That line matters. Without it, every archive eventually becomes soup with footnotes.
-
-- Chat history is stored per session key: `chat:<session_id>:history`.
-- `CHAT_HISTORY_TURNS` trims retained turns.
-- History key expiration is currently fixed to **24h** in `SaveTurn`; cache TTL uses `REDIS_TTL_SECONDS`.
-- Embedding and Qdrant result caching include provider/model/vector names in cache keys to avoid collisions across provider/model changes.
-- On startup, the app attempts to fetch Qdrant vector size for configured `QDRANT_COLLECTION` + `QDRANT_VECTOR_NAME` and logs dimension mismatch warnings later in RAG execution.
-- If no retrieval hits are returned, the assistant responds with a clear "could not find anything relevant" message.
-- `/api/report` runs in a goroutine and writes markdown reports to `reports/<topic>_<timestamp>.md`.
+│   ├── config/
+│   ├── embed/
+│   ├── llm/
+│   ├── logging/
+│   ├── memory/
+│   ├── qdrant/
+│   ├── rag/
+│   ├── reporter/
+│   ├── server/
+│   └── skills/
+├── web/
+└── .github/workflows/tests.yml
+```
