@@ -39,6 +39,8 @@ body {
 .top-actions {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 h1 {
@@ -54,6 +56,14 @@ p {
 
 .controls {
   padding: 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+}
+
+.actions-row {
+  display: flex;
+  justify-content: flex-end;
 }
 
 label {
@@ -64,6 +74,7 @@ label {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border-radius: 14px;
@@ -132,6 +143,64 @@ button:hover {
   opacity: 0.9;
 }
 
+.themes {
+  margin-top: 12px;
+}
+
+.themes-title {
+  color: #aab1c2;
+  font-size: 13px;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.theme-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.theme-chip {
+  border: 1px solid #2b3040;
+  background: #0f1117;
+  color: #c8ceda;
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.diagnostics {
+  margin-top: 12px;
+  border: 1px dashed #384158;
+  background: #111522;
+  color: #d2d7e4;
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.contradictions {
+  margin-top: 12px;
+}
+
+.contradictions-title {
+  color: #aab1c2;
+  font-size: 13px;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.contradiction-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #d7dbe5;
+}
+
+.contradiction-list li {
+  margin-bottom: 4px;
+}
+
 .sources {
   margin-top: 12px;
   color: #c8ceda;
@@ -157,6 +226,18 @@ pre {
   .topbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .controls {
+    grid-template-columns: 1fr;
+  }
+
+  .actions-row {
+    justify-content: stretch;
+  }
+
+  .actions-row button {
+    width: 100%;
   }
 
   .composer {

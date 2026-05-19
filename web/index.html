@@ -17,6 +17,9 @@
       <div class="top-actions">
         <button id="healthBtn" type="button">Health</button>
         <button id="collectionBtn" type="button">Collection</button>
+        <button id="reviewBtn" type="button">Review Last</button>
+        <button id="exportMdBtn" type="button">Export MD</button>
+        <button id="exportJsonBtn" type="button">Export JSON</button>
       </div>
     </header>
 
@@ -25,6 +28,25 @@
         Collection
         <input id="collectionInput" placeholder="Leave blank for .env default" />
       </label>
+      <label>
+        Compare collection
+        <input id="compareCollectionInput" placeholder="Collection to compare against" />
+      </label>
+      <label>
+        Answer mode
+        <select id="modeInput">
+          <option value="">Auto</option>
+          <option value="normal">Normal</option>
+          <option value="skeptical">Skeptical</option>
+          <option value="synthesis">Synthesis</option>
+          <option value="diagnostic">Diagnostic</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="actions-row">
+      <button id="frameworkBtn" type="button">Framework</button>
+      <button id="compareBtn" type="button">Compare</button>
     </section>
 
     <section id="chat" class="chat"></section>
