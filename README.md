@@ -1,3 +1,4 @@
+# README.md
 # ArchiMind
 
 ArchiMind is a Go-based retrieval app for querying Qdrant collections with source-cited answers.
@@ -105,6 +106,21 @@ OPENROUTER_MODEL=deepseek/deepseek-r1
 OPENROUTER_SITE_URL=http://localhost:8090
 OPENROUTER_SITE_NAME=ArchiMind
 
+## 2) Start local infrastructure (Qdrant + Redis)
+
+Use the helper script:
+
+```bash
+./scripts/docker/install_qdrant_redis.sh
+```
+
+This script will:
+- verify Docker availability,
+- pull current images,
+- create/reuse `archimind-qdrant` and `archimind-redis` containers,
+- mount named volumes for persistent local data.
+
+## 3) Run
 QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=
 QDRANT_COLLECTION=your_collection
@@ -153,6 +169,20 @@ go build ./...
 go mod tidy
 ./scripts/rebuild-and-start.sh
 ```
+
+## Continuous integration (GitHub Actions)
+
+CI is configured in `.github/workflows/ci.yml` and runs on pushes and pull requests. The workflow performs:
+- formatting check (`gofmt -l .`),
+- dependency download,
+- unit tests (`go test ./... -v`),
+- full build (`go build ./...`).
+
+## Versioning and release notes
+
+- ArchiMind uses **Semantic Versioning** (`MAJOR.MINOR.PATCH`).
+- Changes are tracked in `CHANGELOG.md`.
+- Add all unreleased work under the `## [Unreleased]` section, then cut a dated version section when releasing.
 
 ## HTTP API
 
