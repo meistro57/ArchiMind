@@ -1,3 +1,4 @@
+# README.md
 # ArchiMind
 
 ArchiMind is a Go web chatbot that answers questions against a Qdrant collection using retrieval-augmented generation (RAG).
@@ -55,7 +56,21 @@ Set these variables (for local development they can live in `.env`, loaded autom
 - `ARCHIMIND_STRICTNESS` (default `balanced`)
 - Accepted values currently in code: `strict`, `balanced`, `exploratory`
 
-## 2) Run
+## 2) Start local infrastructure (Qdrant + Redis)
+
+Use the helper script:
+
+```bash
+./scripts/docker/install_qdrant_redis.sh
+```
+
+This script will:
+- verify Docker availability,
+- pull current images,
+- create/reuse `archimind-qdrant` and `archimind-redis` containers,
+- mount named volumes for persistent local data.
+
+## 3) Run
 
 ```bash
 go run main.go
@@ -78,6 +93,20 @@ go build ./...
 # Run tests
 go test ./...
 ```
+
+## Continuous integration (GitHub Actions)
+
+CI is configured in `.github/workflows/ci.yml` and runs on pushes and pull requests. The workflow performs:
+- formatting check (`gofmt -l .`),
+- dependency download,
+- unit tests (`go test ./... -v`),
+- full build (`go build ./...`).
+
+## Versioning and release notes
+
+- ArchiMind uses **Semantic Versioning** (`MAJOR.MINOR.PATCH`).
+- Changes are tracked in `CHANGELOG.md`.
+- Add all unreleased work under the `## [Unreleased]` section, then cut a dated version section when releasing.
 
 ## HTTP API
 
