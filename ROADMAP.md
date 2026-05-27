@@ -2,7 +2,7 @@
 
 This roadmap tracks what is done, what is in progress, and what is next.
 
-## Current state (v0.6.x)
+## Current state (v0.7.x)
 
 ### Completed
 
@@ -16,17 +16,22 @@ This roadmap tracks what is done, what is in progress, and what is next.
 - Background report generation (`/api/report`)
 - Named vector support and vector dimension validation
 - Collection listing pagination compatibility across Qdrant response shapes
+- Named-vector override support on chat/compare/framework requests
+- Structured retrieval error diagnostics (`error`, `code`, `hint`) for chat/compare failures
+- Web UI collection + vector selectors powered by `/api/collections`
+- Collection-specific preset question chips in empty state
 
 ### In progress
 
-- Tightening retrieval diagnostics UX in the web client
 - Improving documentation and examples
+- Extending collection presets beyond current built-in archive profiles
 
 ## Near-term priorities
 
 1. Retrieval quality tooling
    - Better “why this answer” explanation in UI
    - Stronger unsupported-claim warnings
+   - Per-source confidence controls in answer rendering
 
 2. Multi-collection intelligence
    - Richer compare output structure

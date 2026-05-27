@@ -16,11 +16,14 @@ ArchiMind is a Go-based retrieval app for querying Qdrant collections with sourc
 
 - Source-cited chat with retrieval diagnostics
 - Answer modes: `normal`, `skeptical`, `synthesis`, `diagnostic`
+- Collection + vector-aware querying (`vector_name` on chat/compare/framework)
 - Collection comparison (`/api/compare`)
 - Framework extraction (`/api/framework`)
 - Last-answer review (`/api/review/last`)
 - Session export to Markdown/JSON
 - Background report generation (`/api/report`)
+- Dynamic collection/vector discovery in the web UI (`/api/collections`)
+- Guided preset question chips per selected collection
 
 ---
 
@@ -184,6 +187,13 @@ CI is configured in `.github/workflows/ci.yml` and runs on pushes and pull reque
 - Changes are tracked in `CHANGELOG.md`.
 - Add all unreleased work under the `## [Unreleased]` section, then cut a dated version section when releasing.
 
+## Web UI highlights
+
+- Top controls auto-load available collections from `GET /api/collections`
+- Vector selector appears only when named vectors exist in a selected collection
+- Empty-state preset chips can prefill high-signal starter questions
+- Chat failures return structured diagnostics (`error`, `code`, `hint`) and are surfaced in the UI
+
 ## HTTP API
 
 ### `POST /api/chat`
@@ -200,7 +210,7 @@ Request:
 }
 ```
 
-Response:
+Success response:
 
 ```json
 {
@@ -217,6 +227,16 @@ Response:
     "unsupported_leap_risk": "low",
     "self_audit_checklist": []
   }
+}
+```
+
+Failure response:
+
+```json
+{
+  "error": "embedding and collection vector dimensions do not match",
+  "code": "embedding_dimension_mismatch",
+  "hint": "Verify QDRANT_VECTOR_NAME and selected embedding model dimensions."
 }
 ```
 
@@ -297,6 +317,17 @@ Returns raw collection info for a specific or default collection.
 
 Returns all collection names and discovered vector names.
 Collection listing follows Qdrant pagination (`next_page_offset`) so large installs and older/newer response shapes are fully enumerated.
+
+```json
+{
+  "collections": [
+    {
+      "name": "my_collection",
+      "vectors": ["claims_vec", "chunks_vec"]
+    }
+  ]
+}
+```
 
 ## Project structure
 
