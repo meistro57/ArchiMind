@@ -4,36 +4,44 @@
   <meta charset="utf-8" />
   <title>ArchiMind</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link href="/style.css" rel="stylesheet" />
 </head>
 <body>
   <main class="app">
-    <header class="topbar">
-      <div>
-        <h1>ArchiMind</h1>
-        <p>Ask your Qdrant collections. Redis remembers the sparks.</p>
-      </div>
 
-      <div class="top-actions">
-        <button id="healthBtn" type="button">Health</button>
-        <button id="collectionBtn" type="button">Collection</button>
-        <button id="reviewBtn" type="button">Review Last</button>
-        <button id="exportMdBtn" type="button">Export MD</button>
-        <button id="exportJsonBtn" type="button">Export JSON</button>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-glyph">◈</span>
+        <div>
+          <h1>ArchiMind</h1>
+          <p>Ask your archive. Trace the sources. Keep the speculation on a leash.</p>
+        </div>
       </div>
+      <nav class="top-actions">
+        <button id="healthBtn" type="button" class="btn-ghost">⬡ Health</button>
+        <button id="collectionBtn" type="button" class="btn-ghost">⊞ Collection</button>
+        <button id="reviewBtn" type="button" class="btn-ghost">↺ Review Last</button>
+        <button id="exportMdBtn" type="button" class="btn-ghost">↓ MD</button>
+        <button id="exportJsonBtn" type="button" class="btn-ghost">↓ JSON</button>
+      </nav>
     </header>
 
     <section class="controls">
-      <label>
-        Collection
-        <input id="collectionInput" placeholder="Leave blank for .env default" />
+      <label class="ctrl-label">
+        <span>Collection</span>
+        <select id="collectionInput">
+          <option value="">Loading collections...</option>
+        </select>
       </label>
-      <label>
-        Compare collection
-        <input id="compareCollectionInput" placeholder="Collection to compare against" />
+      <label class="ctrl-label">
+        <span>Compare against</span>
+        <select id="compareCollectionInput">
+          <option value="">Loading collections...</option>
+        </select>
       </label>
-      <label>
-        Answer mode
+      <label class="ctrl-label">
+        <span>Answer mode</span>
         <select id="modeInput">
           <option value="">Auto</option>
           <option value="normal">Normal</option>
@@ -42,21 +50,37 @@
           <option value="diagnostic">Diagnostic</option>
         </select>
       </label>
+      <label class="ctrl-label">
+        <span>Model</span>
+        <select id="modelInput">
+          <option value="">Loading models...</option>
+        </select>
+      </label>
+      <div class="ctrl-actions">
+        <label class="ctrl-label" id="vectorLabel" style="display:none">
+          <span>Vector</span>
+          <select id="vectorInput"></select>
+        </label>
+        <button id="frameworkBtn" type="button" class="btn-accent">⬡ Framework</button>
+        <button id="compareBtn" type="button" class="btn-accent">⇄ Compare</button>
+      </div>
     </section>
 
-    <section class="actions-row">
-      <button id="frameworkBtn" type="button">Framework</button>
-      <button id="compareBtn" type="button">Compare</button>
+    <section id="chat" class="chat">
+      <div class="chat-empty">
+        <span class="chat-empty-glyph">◈</span>
+        <p>Archive standing by. Select a collection and ask something.</p>
+        <div id="presets" class="preset-chips"></div>
+      </div>
     </section>
-
-    <section id="chat" class="chat"></section>
 
     <form id="chatForm" class="composer">
       <textarea id="messageInput" placeholder="Ask ArchiMind something..." rows="3"></textarea>
-      <button type="submit">Ask</button>
+      <button type="submit" class="btn-ask">Ask</button>
     </form>
-  </main>
 
+  </main>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

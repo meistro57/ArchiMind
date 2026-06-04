@@ -2,7 +2,7 @@
 
 This roadmap tracks what is done, what is in progress, and what is next.
 
-## Current state (v0.7.x)
+## Current state (v0.8.x)
 
 ### Completed
 
@@ -14,12 +14,18 @@ This roadmap tracks what is done, what is in progress, and what is next.
 - Last-answer review (`/api/review/last`)
 - Session export to Markdown/JSON (`/api/export/*`)
 - Background report generation (`/api/report`)
+- Runtime chat-model switching (`GET /api/models`, `POST /api/model`)
 - Named vector support and vector dimension validation
 - Collection listing pagination compatibility across Qdrant response shapes
 - Named-vector override support on chat/compare/framework requests
 - Structured retrieval error diagnostics (`error`, `code`, `hint`) for chat/compare failures
 - Web UI collection + vector selectors powered by `/api/collections`
-- Collection-specific preset question chips in empty state
+- Web UI model selector + live model switching
+- Copy-to-clipboard action on assistant response cards
+- Hybrid retrieval (dense + BM25 RRF) toggle via `HYBRID_SEARCH`
+- `meta_reflections` fan-out retrieval to `mb_chunks` with merge/dedup/re-rank
+- Reflection dead-weight filtering (`reflection_confidence == 0`, `is_empty_reflection == true`)
+- Local Qdrant worker-pool dispatch for retrieval jobs
 
 ### In progress
 

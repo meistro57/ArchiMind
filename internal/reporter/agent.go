@@ -65,7 +65,7 @@ func (a *Agent) Generate(ctx context.Context, req ReportRequest) error {
 		return fmt.Errorf("embed topic: %w", err)
 	}
 
-	points, err := a.qdr.Query(ctx, a.cfg.QdrantCollection, vector, defaultQueryLimit)
+	points, err := a.qdr.Query(ctx, a.cfg.QdrantCollection, a.cfg.QdrantVectorName, vector, defaultQueryLimit)
 	if err != nil {
 		return fmt.Errorf("query qdrant: %w", err)
 	}

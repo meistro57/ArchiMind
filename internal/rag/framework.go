@@ -24,7 +24,7 @@ type FrameworkResult struct {
 	Sources         []Source             `json:"sources,omitempty"`
 }
 
-func (e *Engine) ExtractFramework(ctx context.Context, sessionID string, collection string, topic string) (FrameworkResult, error) {
+func (e *Engine) ExtractFramework(ctx context.Context, sessionID string, collection string, vectorName string, topic string) (FrameworkResult, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	collection = strings.TrimSpace(collection)
 	topic = strings.TrimSpace(topic)
@@ -43,7 +43,7 @@ func (e *Engine) ExtractFramework(ctx context.Context, sessionID string, collect
 		return FrameworkResult{}, err
 	}
 
-	points, err := e.getQdrantResults(ctx, collection, topic, vector)
+	points, err := e.getQdrantResults(ctx, collection, vectorName, topic, vector)
 	if err != nil {
 		return FrameworkResult{}, err
 	}

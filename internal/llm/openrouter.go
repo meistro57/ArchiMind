@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"archimind/internal/config"
@@ -18,6 +20,7 @@ type OpenRouterProvider struct {
 	siteURL  string
 	siteName string
 	client   *http.Client
+	mu       sync.RWMutex
 }
 
 func NewOpenRouterProvider(cfg config.Config) *OpenRouterProvider {
@@ -54,7 +57,7 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, messages []Message) (stri
 	}
 
 	body := chatRequest{
-		Model:       p.model,
+		Model:       p.Model(),
 		Messages:    messages,
 		Temperature: 0.2,
 	}
@@ -108,4 +111,22 @@ func (p *OpenRouterProvider) Chat(ctx context.Context, messages []Message) (stri
 	}
 
 	return parsed.Choices[0].Message.Content, nil
+}
+
+func (p *OpenRouterProvider) SetModel(model string) {
+	next := strings.TrimSpace(model)
+	if next == "" {
+		return
+	}
+
+	p.mu.Lock()
+	p.model = next
+	p.mu.Unlock()
+}
+
+func (p *OpenRouterProvider) Model() string {
+	p.mu.RLock()
+	current := strings.TrimSpace(p.model)
+	p.mu.RUnlock()
+	return current
 }

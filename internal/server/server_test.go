@@ -5,6 +5,44 @@ import (
 	"testing"
 )
 
+func TestSupportsTextCompletion(t *testing.T) {
+	tests := []struct {
+		name     string
+		modality string
+		want     bool
+	}{
+		{name: "text to text", modality: "text->text", want: true},
+		{name: "multimodal to text", modality: "image+text->text", want: true},
+		{name: "embedding only", modality: "text->embedding", want: false},
+		{name: "unknown text", modality: "text", want: true},
+		{name: "empty defaults to include", modality: "", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := supportsTextCompletion(tt.modality); got != tt.want {
+				t.Fatalf("supportsTextCompletion(%q) = %t, want %t", tt.modality, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnsureModelOption(t *testing.T) {
+	models := []modelOption{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}}
+	withExisting := ensureModelOption(models, "a")
+	if len(withExisting) != 2 {
+		t.Fatalf("expected unchanged length, got %d", len(withExisting))
+	}
+
+	withMissing := ensureModelOption(models, "c")
+	if len(withMissing) != 3 {
+		t.Fatalf("expected prepended model, got %d", len(withMissing))
+	}
+	if withMissing[0].ID != "c" {
+		t.Fatalf("expected active model to be prepended, got %q", withMissing[0].ID)
+	}
+}
+
 func TestClassifyChatError(t *testing.T) {
 	tests := []struct {
 		name string

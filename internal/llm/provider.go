@@ -10,4 +10,6 @@ type Message struct {
 
 type Provider interface {
 	Chat(ctx context.Context, messages []Message) (string, error)
+	SetModel(model string)
+	Model() string
 }

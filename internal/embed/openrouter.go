@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -97,21 +98,88 @@ func (p *OpenRouterProvider) Embed(ctx context.Context, text string) ([]float64,
 	}
 	defer resp.Body.Close()
 
-	var parsed openRouterEmbeddingResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+	rawResp, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return nil, err
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if parsed.Error != nil {
+	var parsed openRouterEmbeddingResponse
+	if err := json.Unmarshal(rawResp, &parsed); err != nil {
+		return nil, err
+	}
+
+	if parsed.Error != nil && parsed.Error.Message != "" {
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return nil, fmt.Errorf("openrouter embedding error: %s", parsed.Error.Message)
 		}
+		return nil, fmt.Errorf("openrouter embedding response error: %s", parsed.Error.Message)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("openrouter embedding returned HTTP %d", resp.StatusCode)
 	}
 
-	if len(parsed.Data) == 0 || len(parsed.Data[0].Embedding) == 0 {
+	embedding := extractEmbedding(parsed, rawResp)
+	if len(embedding) == 0 {
 		return nil, fmt.Errorf("openrouter returned empty embedding")
 	}
 
-	return parsed.Data[0].Embedding, nil
+	return embedding, nil
+}
+
+func extractEmbedding(parsed openRouterEmbeddingResponse, rawResp []byte) []float64 {
+	if len(parsed.Data) > 0 && len(parsed.Data[0].Embedding) > 0 {
+		return parsed.Data[0].Embedding
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rawResp, &payload); err != nil {
+		return nil
+	}
+
+	candidates := []any{
+		payload["embedding"],
+		payload["vector"],
+		payload["embeddings"],
+	}
+
+	if data, ok := payload["data"].([]any); ok && len(data) > 0 {
+		candidates = append(candidates, data[0])
+	}
+
+	for _, candidate := range candidates {
+		if vector := extractVector(candidate); len(vector) > 0 {
+			return vector
+		}
+	}
+
+	return nil
+}
+
+func extractVector(value any) []float64 {
+	switch typed := value.(type) {
+	case []float64:
+		return typed
+	case []any:
+		vector := make([]float64, 0, len(typed))
+		for _, item := range typed {
+			number, ok := item.(float64)
+			if !ok {
+				return nil
+			}
+			vector = append(vector, number)
+		}
+		return vector
+	case map[string]any:
+		nestedKeys := []string{"embedding", "vector", "values", "data", "embeddings"}
+		for _, key := range nestedKeys {
+			if nested, ok := typed[key]; ok {
+				if vector := extractVector(nested); len(vector) > 0 {
+					return vector
+				}
+			}
+		}
+	}
+
+	return nil
 }

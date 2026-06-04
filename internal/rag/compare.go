@@ -23,7 +23,7 @@ type CompareResult struct {
 	Right  CollectionInsights `json:"right"`
 }
 
-func (e *Engine) CompareCollections(ctx context.Context, sessionID string, leftCollection string, rightCollection string, question string, requestedMode string) (CompareResult, error) {
+func (e *Engine) CompareCollections(ctx context.Context, sessionID string, leftCollection string, rightCollection string, vectorName string, question string, requestedMode string) (CompareResult, error) {
 	leftCollection = strings.TrimSpace(leftCollection)
 	rightCollection = strings.TrimSpace(rightCollection)
 	question = strings.TrimSpace(question)
@@ -42,11 +42,11 @@ func (e *Engine) CompareCollections(ctx context.Context, sessionID string, leftC
 		return CompareResult{}, err
 	}
 
-	leftPoints, err := e.getQdrantResults(ctx, leftCollection, question, vector)
+	leftPoints, err := e.getQdrantResults(ctx, leftCollection, vectorName, question, vector)
 	if err != nil {
 		return CompareResult{}, err
 	}
-	rightPoints, err := e.getQdrantResults(ctx, rightCollection, question, vector)
+	rightPoints, err := e.getQdrantResults(ctx, rightCollection, vectorName, question, vector)
 	if err != nil {
 		return CompareResult{}, err
 	}

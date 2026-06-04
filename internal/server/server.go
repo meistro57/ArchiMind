@@ -9,23 +9,28 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"archimind/internal/config"
 	"archimind/internal/embed"
 	"archimind/internal/llm"
+	"archimind/internal/memory"
 	"archimind/internal/qdrant"
 	"archimind/internal/rag"
 	"archimind/internal/reporter"
 )
 
 const appVersion = "0.6.0"
+const workerOpenRouterModel = "google/gemini-2.0-flash-001"
 
 type Server struct {
 	cfg    config.Config
 	rag    *rag.Engine
 	qdr    *qdrant.Client
+	chat   llm.Provider
+	mem    *memory.RedisMemory
 	logger *log.Logger
 	http   *http.Server
 }
@@ -34,6 +39,7 @@ type ChatRequest struct {
 	SessionID  string `json:"session_id"`
 	Message    string `json:"message"`
 	Collection string `json:"collection,omitempty"`
+	VectorName string `json:"vector_name,omitempty"`
 	Mode       string `json:"mode,omitempty"`
 }
 
@@ -52,6 +58,7 @@ type CompareRequest struct {
 	Message         string `json:"message"`
 	LeftCollection  string `json:"left_collection"`
 	RightCollection string `json:"right_collection"`
+	VectorName      string `json:"vector_name,omitempty"`
 	Mode            string `json:"mode,omitempty"`
 }
 
@@ -65,6 +72,7 @@ type FrameworkRequest struct {
 	SessionID  string `json:"session_id"`
 	Message    string `json:"message"`
 	Collection string `json:"collection,omitempty"`
+	VectorName string `json:"vector_name,omitempty"`
 }
 
 type FrameworkResponse struct {
@@ -92,11 +100,45 @@ type ReportStartResponse struct {
 	OutputPath string `json:"output_path"`
 }
 
-func New(cfg config.Config, ragEngine *rag.Engine, qdrantClient *qdrant.Client, logger *log.Logger) *Server {
+type SetModelRequest struct {
+	Model string `json:"model"`
+}
+
+type modelOption struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type modelsResponse struct {
+	Models []modelOption `json:"models"`
+	Active string        `json:"active"`
+}
+
+type openRouterModel struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Architecture struct {
+		Modality string `json:"modality"`
+	} `json:"architecture"`
+}
+
+type openRouterModelsEnvelope struct {
+	Data   []openRouterModel `json:"data"`
+	Models []openRouterModel `json:"models"`
+}
+
+type openRouterModelsCache struct {
+	Models   []modelOption `json:"models"`
+	CachedAt time.Time     `json:"cached_at"`
+}
+
+func New(cfg config.Config, ragEngine *rag.Engine, qdrantClient *qdrant.Client, chatProvider llm.Provider, mem *memory.RedisMemory, logger *log.Logger) *Server {
 	s := &Server{
 		cfg:    cfg,
 		rag:    ragEngine,
 		qdr:    qdrantClient,
+		chat:   chatProvider,
+		mem:    mem,
 		logger: logger,
 	}
 
@@ -112,6 +154,9 @@ func New(cfg config.Config, ragEngine *rag.Engine, qdrantClient *qdrant.Client, 
 	mux.HandleFunc("/api/report", s.handleReport)
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/collection", s.handleCollection)
+	mux.HandleFunc("/api/collections", s.handleCollections)
+	mux.HandleFunc("/api/models", s.handleModels)
+	mux.HandleFunc("/api/model", s.handleSetModel)
 
 	s.http = &http.Server{
 		Addr:              fmt.Sprintf(":%s", cfg.AppPort),
@@ -149,6 +194,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	req.Message = strings.TrimSpace(req.Message)
 	req.Collection = strings.TrimSpace(req.Collection)
+	req.VectorName = strings.TrimSpace(req.VectorName)
 	req.SessionID = strings.TrimSpace(req.SessionID)
 	req.Mode = strings.TrimSpace(req.Mode)
 
@@ -161,7 +207,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		req.SessionID = "default"
 	}
 
-	answer, sources, themes, contradictions, sourceInfluence, err := s.rag.Ask(r.Context(), req.SessionID, req.Collection, req.Message, req.Mode)
+	answer, sources, themes, contradictions, sourceInfluence, err := s.rag.Ask(r.Context(), req.SessionID, req.Collection, req.VectorName, req.Message, req.Mode)
 	if err != nil {
 		s.logger.Printf("chat error: %v", err)
 		diag := classifyChatError(err)
@@ -209,6 +255,7 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	req.Message = strings.TrimSpace(req.Message)
 	req.LeftCollection = strings.TrimSpace(req.LeftCollection)
 	req.RightCollection = strings.TrimSpace(req.RightCollection)
+	req.VectorName = strings.TrimSpace(req.VectorName)
 	req.Mode = strings.TrimSpace(req.Mode)
 
 	if req.SessionID == "" {
@@ -223,7 +270,7 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.rag.CompareCollections(r.Context(), req.SessionID, req.LeftCollection, req.RightCollection, req.Message, req.Mode)
+	result, err := s.rag.CompareCollections(r.Context(), req.SessionID, req.LeftCollection, req.RightCollection, req.VectorName, req.Message, req.Mode)
 	if err != nil {
 		s.logger.Printf("compare error: %v", err)
 		diag := classifyChatError(err)
@@ -259,6 +306,7 @@ func (s *Server) handleFramework(w http.ResponseWriter, r *http.Request) {
 	req.SessionID = strings.TrimSpace(req.SessionID)
 	req.Message = strings.TrimSpace(req.Message)
 	req.Collection = strings.TrimSpace(req.Collection)
+	req.VectorName = strings.TrimSpace(req.VectorName)
 	if req.SessionID == "" {
 		req.SessionID = "default"
 	}
@@ -267,7 +315,7 @@ func (s *Server) handleFramework(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.rag.ExtractFramework(r.Context(), req.SessionID, req.Collection, req.Message)
+	result, err := s.rag.ExtractFramework(r.Context(), req.SessionID, req.Collection, req.VectorName, req.Message)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -381,10 +429,13 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	timestamp := time.Now().UTC().Format("20060102_150405")
 	outputPath := filepath.Join("reports", sanitizeReportTopic(req.Topic)+"_"+timestamp+".md")
 
+	workerChatProvider := llm.NewOpenRouterProvider(s.cfg)
+	workerChatProvider.SetModel(workerOpenRouterModel)
+
 	reportAgent := reporter.NewAgent(
 		s.cfg,
 		s.qdr,
-		llm.NewOpenRouterProvider(s.cfg),
+		workerChatProvider,
 		buildReportEmbedder(s.cfg),
 		s.logger,
 	)
@@ -429,6 +480,217 @@ func (s *Server) handleCollection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, info)
+}
+
+func (s *Server) handleCollections(w http.ResponseWriter, r *http.Request) {
+	names, err := s.qdr.ListCollections(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	type collectionMeta struct {
+		Name    string   `json:"name"`
+		Vectors []string `json:"vectors"`
+	}
+
+	collections := make([]collectionMeta, 0, len(names))
+	for _, name := range names {
+		info, err := s.qdr.CollectionInfo(r.Context(), name)
+		vectors := []string{}
+		if err == nil && info != nil {
+			for v := range info.Vectors {
+				// "default" is a synthetic name parseVectors assigns to
+				// unnamed single-vector collections — don't expose it.
+				if v != "default" {
+					vectors = append(vectors, v)
+				}
+			}
+		}
+		collections = append(collections, collectionMeta{Name: name, Vectors: vectors})
+	}
+
+	writeJSON(w, map[string]any{"collections": collections})
+}
+
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	active := strings.TrimSpace(s.cfg.OpenRouterModel)
+	if s.chat != nil {
+		if current := strings.TrimSpace(s.chat.Model()); current != "" {
+			active = current
+		}
+	}
+
+	models, err := s.loadModels(r.Context())
+	if err != nil {
+		s.logger.Printf("openrouter models fetch failed: %v", err)
+		models = []modelOption{{ID: active, Name: active}}
+	}
+
+	models = ensureModelOption(models, active)
+	writeJSON(w, modelsResponse{Models: models, Active: active})
+}
+
+func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.chat == nil {
+		writeError(w, http.StatusInternalServerError, "chat provider unavailable")
+		return
+	}
+
+	var req SetModelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	req.Model = strings.TrimSpace(req.Model)
+	if req.Model == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+
+	s.chat.SetModel(req.Model)
+	s.logger.Printf("runtime model switch: model=%s", s.chat.Model())
+	writeJSON(w, map[string]any{"ok": true, "model": s.chat.Model()})
+}
+
+func (s *Server) loadModels(ctx context.Context) ([]modelOption, error) {
+	const cacheKey = "openrouter:models"
+	if s.mem != nil {
+		var cached openRouterModelsCache
+		found, err := s.mem.GetJSON(ctx, cacheKey, &cached)
+		if err == nil && found && len(cached.Models) > 0 && time.Since(cached.CachedAt) < time.Hour {
+			return cached.Models, nil
+		}
+	}
+
+	models, err := s.fetchOpenRouterModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.mem != nil && len(models) > 0 {
+		_ = s.mem.SetJSON(ctx, cacheKey, openRouterModelsCache{
+			Models:   models,
+			CachedAt: time.Now().UTC(),
+		})
+	}
+
+	return models, nil
+}
+
+func (s *Server) fetchOpenRouterModels(ctx context.Context) ([]modelOption, error) {
+	if strings.TrimSpace(s.cfg.OpenRouterAPIKey) == "" {
+		return nil, fmt.Errorf("OPENROUTER_API_KEY is missing")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://openrouter.ai/api/v1/models", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(s.cfg.OpenRouterAPIKey))
+	if s.cfg.OpenRouterSiteURL != "" {
+		req.Header.Set("HTTP-Referer", s.cfg.OpenRouterSiteURL)
+	}
+	if s.cfg.OpenRouterSiteName != "" {
+		req.Header.Set("X-OpenRouter-Title", s.cfg.OpenRouterSiteName)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var envelope openRouterModelsEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("openrouter returned HTTP %d", resp.StatusCode)
+	}
+
+	rawModels := envelope.Data
+	if len(rawModels) == 0 {
+		rawModels = envelope.Models
+	}
+
+	seen := map[string]struct{}{}
+	models := make([]modelOption, 0, len(rawModels))
+	for _, model := range rawModels {
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+
+		modality := strings.ToLower(strings.TrimSpace(model.Architecture.Modality))
+		if modality != "" && !supportsTextCompletion(modality) {
+			continue
+		}
+
+		name := strings.TrimSpace(model.Name)
+		if name == "" {
+			name = id
+		}
+
+		models = append(models, modelOption{ID: id, Name: name})
+		seen[id] = struct{}{}
+	}
+
+	sort.Slice(models, func(i, j int) bool {
+		left := strings.ToLower(models[i].Name)
+		right := strings.ToLower(models[j].Name)
+		if left == right {
+			return models[i].ID < models[j].ID
+		}
+		return left < right
+	})
+
+	if len(models) == 0 {
+		return nil, fmt.Errorf("openrouter returned no chat-capable models")
+	}
+
+	return models, nil
+}
+
+func supportsTextCompletion(modality string) bool {
+	value := strings.ToLower(strings.TrimSpace(modality))
+	if value == "" {
+		return true
+	}
+	if strings.Contains(value, "->text") || strings.Contains(value, "text->text") {
+		return true
+	}
+	if strings.Contains(value, "embedding") {
+		return false
+	}
+	return strings.Contains(value, "text")
+}
+
+func ensureModelOption(models []modelOption, active string) []modelOption {
+	active = strings.TrimSpace(active)
+	if active == "" {
+		return models
+	}
+	for _, model := range models {
+		if model.ID == active {
+			return models
+		}
+	}
+	return append([]modelOption{{ID: active, Name: active}}, models...)
 }
 
 func writeJSON(w http.ResponseWriter, value any) {

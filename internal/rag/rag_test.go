@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"archimind/internal/memory"
+	"archimind/internal/qdrant"
 )
 
 func TestInferAnswerMode(t *testing.T) {
@@ -14,9 +15,9 @@ func TestInferAnswerMode(t *testing.T) {
 		question string
 		expected AnswerMode
 	}{
-		{question: "Brainstorm a slogan for our app", expected: AnswerModeCreative},
-		{question: "What should I do to improve onboarding?", expected: AnswerModeAdvisory},
-		{question: "What is Redis used for?", expected: AnswerModeKnowledge},
+		{question: "Brainstorm a slogan for our app", expected: AnswerModeNormal},
+		{question: "What should I do to improve onboarding?", expected: AnswerModeNormal},
+		{question: "What is Redis used for?", expected: AnswerModeNormal},
 	}
 
 	for _, tc := range tests {
@@ -32,7 +33,7 @@ func TestBuildSignalMetrics(t *testing.T) {
 		{Index: 1, Score: 0.9, Title: "A", Text: "First"},
 		{Index: 2, Score: 0.7, Title: "B", Text: "Second"},
 	}
-	signal := BuildSignal("Compare options", sources)
+	signal := BuildSignal("Compare options", sources, "")
 
 	if signal.TopScore != 0.9 {
 		t.Fatalf("expected top score 0.9, got %f", signal.TopScore)
@@ -49,14 +50,14 @@ func TestBuildSignalMetrics(t *testing.T) {
 }
 
 func TestBuildSystemPromptIncludesCoreRules(t *testing.T) {
-	signal := RetrievalSignal{Mode: AnswerModeAdvisory, Strictness: "strict", Cluster: "faq"}
-	prompt := buildSystemPrompt(signal)
+	signal := RetrievalSignal{Mode: AnswerModeNormal, Strictness: "strict", Cluster: "faq"}
+	prompt := buildSystemPrompt(signal, nil, nil)
 
 	required := []string{
 		"Use only the supplied Qdrant context for factual claims.",
 		"Cite retrieved context with bracket citations like [1], [2].",
 		"Strictness profile: strict.",
-		"Answer mode: advisory.",
+		"Answer mode: normal.",
 		"Cluster profile: faq.",
 	}
 
@@ -78,6 +79,10 @@ func TestClassifyCluster(t *testing.T) {
 	if got := classifyCluster(faqSources); got != "faq" {
 		t.Fatalf("expected faq cluster, got %q", got)
 	}
+}
+
+func TestInferAnswerModeKeywordHints(t *testing.T) {
+	tests := []struct {
 		name     string
 		question string
 		want     AnswerMode
@@ -272,6 +277,88 @@ func TestBuildFrameworkSummary(t *testing.T) {
 	summary := BuildFrameworkSummary("my topic", components, contradictions, influence)
 	if !containsAll(summary, "Framework draft for my topic", "Primary tension to resolve", "Most influential source") {
 		t.Fatalf("BuildFrameworkSummary() missing expected parts: %s", summary)
+	}
+}
+
+func TestMergeFanoutPointsDeduplicatesAndCaps(t *testing.T) {
+	primary := []qdrant.SearchPoint{
+		{ID: "reflection-a", Score: 0.82, Payload: map[string]any{"source_id": "root_access", "source_point_id": "38", "summary": "Reflection"}},
+		{ID: "reflection-b", Score: 0.79, Payload: map[string]any{"source_id": "root_access", "source_point_id": "39", "summary": "Reflection 2"}},
+	}
+	secondary := []qdrant.SearchPoint{
+		{ID: "chunk-dup", Score: 0.91, Payload: map[string]any{"source_id": "root_access", "index": 38, "text": "ADHD mention"}},
+		{ID: "chunk-c", Score: 0.77, Payload: map[string]any{"source_id": "root_access", "index": 40, "text": "Other mention"}},
+	}
+
+	merged := mergeFanoutPoints(primary, secondary, 2)
+	if len(merged) != 2 {
+		t.Fatalf("mergeFanoutPoints() len = %d, want 2", len(merged))
+	}
+	if merged[0].ID != "chunk-dup" {
+		t.Fatalf("expected highest score duplicate survivor chunk-dup, got %v", merged[0].ID)
+	}
+	if merged[1].ID != "reflection-b" {
+		t.Fatalf("expected second result reflection-b, got %v", merged[1].ID)
+	}
+}
+
+func TestShouldDropReflectionPoint(t *testing.T) {
+	zeroConfidence := map[string]any{
+		"claims":                []any{"claim"},
+		"echoes":                []any{"echo"},
+		"summary":               "summary",
+		"reflection_confidence": 0.0,
+		"is_empty_reflection":   false,
+	}
+	if !shouldDropReflectionPoint(zeroConfidence) {
+		t.Fatal("expected zero-confidence reflection to be dropped")
+	}
+
+	emptyReflection := map[string]any{
+		"claims":                []any{"claim"},
+		"echoes":                []any{"echo"},
+		"summary":               "summary",
+		"reflection_confidence": 0.9,
+		"is_empty_reflection":   true,
+	}
+	if !shouldDropReflectionPoint(emptyReflection) {
+		t.Fatal("expected empty reflection to be dropped")
+	}
+
+	validReflection := map[string]any{
+		"claims":                []any{"claim"},
+		"echoes":                []any{"echo"},
+		"summary":               "summary",
+		"reflection_confidence": 0.9,
+		"is_empty_reflection":   false,
+	}
+	if shouldDropReflectionPoint(validReflection) {
+		t.Fatal("expected valid reflection to be kept")
+	}
+
+	nonReflection := map[string]any{"text": "raw chunk"}
+	if shouldDropReflectionPoint(nonReflection) {
+		t.Fatal("expected non-reflection point to be kept")
+	}
+}
+
+func TestFilterDeadWeightReflectionPoints(t *testing.T) {
+	points := []qdrant.SearchPoint{
+		{ID: "keep-chunk", Score: 0.91, Payload: map[string]any{"text": "raw chunk"}},
+		{ID: "drop-zero", Score: 0.88, Payload: map[string]any{"claims": []any{"claim"}, "echoes": []any{"echo"}, "summary": "summary", "reflection_confidence": 0.0}},
+		{ID: "drop-empty", Score: 0.85, Payload: map[string]any{"claims": []any{"claim"}, "echoes": []any{"echo"}, "summary": "summary", "reflection_confidence": 0.7, "is_empty_reflection": true}},
+		{ID: "keep-reflection", Score: 0.83, Payload: map[string]any{"claims": []any{"claim"}, "echoes": []any{"echo"}, "summary": "summary", "reflection_confidence": 0.7}},
+	}
+
+	filtered, dropped := filterDeadWeightReflectionPoints(points)
+	if dropped != 2 {
+		t.Fatalf("filterDeadWeightReflectionPoints() dropped = %d, want 2", dropped)
+	}
+	if len(filtered) != 2 {
+		t.Fatalf("filterDeadWeightReflectionPoints() len = %d, want 2", len(filtered))
+	}
+	if filtered[0].ID != "keep-chunk" || filtered[1].ID != "keep-reflection" {
+		t.Fatalf("unexpected filtered order/ids: got %v then %v", filtered[0].ID, filtered[1].ID)
 	}
 }
 

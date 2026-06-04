@@ -73,7 +73,7 @@ func main() {
 		expectedVectorSize,
 	)
 
-	appServer := server.New(cfg, ragEngine, qdrantClient, logger)
+	appServer := server.New(cfg, ragEngine, qdrantClient, chatProvider, redisMemory, logger)
 
 	go func() {
 		if err := appServer.Start(); err != nil {
@@ -95,6 +95,8 @@ func main() {
 	if err := appServer.Shutdown(ctx); err != nil {
 		logger.Printf("shutdown error: %v", err)
 	}
+
+	ragEngine.Close()
 
 	if err := redisMemory.Close(); err != nil {
 		logger.Printf("redis close error: %v", err)

@@ -1,124 +1,79 @@
 # AGENTS.md
 
-This file is a practical guide for coding agents working in the ArchiMind repository.
+Practical guide for coding agents working in ArchiMind.
 
 ## Repository snapshot
 
-- Language: **Go** (`go.mod` uses Go `1.22`)
-- Runtime: HTTP server with static web UI
-- Storage/services:
-  - Qdrant for retrieval
-  - Redis for history/caching
-  - OpenRouter for chat
-  - Ollama or OpenRouter for embeddings
+- Language: Go 1.22
+- Runtime: HTTP server + static web UI
+- Services: Qdrant, Redis, OpenRouter, optional Ollama embeddings
 - Entry point: `main.go`
 
-## First-run checklist for agents
+## Fast orientation
 
-1. Read `internal/config/config.go` for current env keys and defaults.
-2. Read `main.go` for wiring decisions and startup behavior.
-3. Read `internal/rag/rag.go` before touching answer behavior.
-4. Validate with:
+1. Read `internal/config/config.go` for env keys/defaults.
+2. Read `main.go` for wiring and startup behavior.
+3. Read `internal/rag/rag.go` before changing answer behavior.
+4. Read `internal/server/server.go` before changing API behavior.
+
+## Validation commands
 
 ```bash
 go test ./...
 go build ./...
-```
-
-5. Format Go code after edits:
-
-```bash
 gofmt -w .
 ```
 
-## Observed commands
+CI exists at `.github/workflows/tests.yml` and runs tests on push/PR.
 
-No Makefile/Taskfile/CI config was found in this repo. Use native Go commands.
+## Architecture flow
 
-```bash
-# Run app
-go run main.go
-
-# Format
-gofmt -w .
-
-# Dependency cleanup
-go mod tidy
-
-# Test all packages
-go test ./...
-
-# Build all packages
-go build ./...
-```
-
-## Architecture and request flow
-
-1. `internal/server/server.go` receives `POST /api/chat`.
+1. `POST /api/chat` handled by `internal/server/server.go`.
 2. Server calls `rag.Engine.Ask(...)`.
-3. `Ask` flow in `internal/rag/rag.go`:
-   - Save user turn to Redis
-   - Generate embedding (`internal/embed` provider)
-   - Query Qdrant (`internal/qdrant/query.go`)
-   - Convert points to citation sources (`pointsToSources`)
-   - Build system + user prompts
-   - Call chat model (`internal/llm/openrouter.go`)
-   - Save assistant turn to Redis
-4. Response includes `answer` and `sources` to UI.
+3. `Ask` does embedding, retrieval, source shaping, prompt build, LLM call, and memory write.
+4. For `meta_reflections`, retrieval fans out to `mb_chunks`, merges/deduplicates/re-ranks, then filters dead reflection points before context assembly.
+5. Retrieval can run through hybrid search (`HYBRID_SEARCH=true`) and Qdrant worker-pool dispatch.
+6. Response returns answer + sources + diagnostics metadata.
 
-Background reporting flow:
+Background report flow:
 
-1. `internal/server/server.go` receives `POST /api/report`.
-2. Server creates `reporter.Agent` and launches `Generate(...)` in a goroutine.
-3. `Generate` embeds topic, queries Qdrant with high limit, assembles token-bounded context, synthesizes markdown via chat provider, and writes report file.
+1. `POST /api/report` accepted by server.
+2. `reporter.Agent.Generate(...)` runs in a goroutine.
+3. Report worker uses `google/gemini-2.0-flash-001`.
+4. Report is written to `reports/<topic>_<timestamp>.md`.
 
-## Key files and responsibilities
+## Key files
 
-- `main.go`
-  - Config load, provider selection, dependency wiring
-  - Startup logging and graceful shutdown
-- `internal/config/config.go`
-  - `.env` + environment loading
-  - defaults and value validation
-- `internal/rag/rag.go`
-  - RAG orchestration, retrieval signal heuristics, prompt construction
-- `internal/qdrant/query.go`
-  - Vector query to Qdrant `/collections/{name}/points/query` with caller-provided limit
-- `internal/qdrant/collections.go`
-  - Collection info + named vector size lookup
-- `internal/memory/redis.go`
-  - Chat history storage and JSON cache helpers
-- `internal/embed/`
-  - `ollama.go` and `openrouter.go` embedding providers
-- `internal/llm/openrouter.go`
-  - Chat completion provider
-- `internal/reporter/agent.go`
-  - Background report synthesis from Qdrant retrieval context
-- `web/app.js`
-  - Front-end chat interactions and source rendering
+- `main.go`: config load, provider setup, server lifecycle
+- `internal/config/config.go`: env parsing/validation
+- `internal/server/server.go`: HTTP handlers + route surface
+- `internal/rag/rag.go`: core RAG orchestration + signal heuristics
+- `internal/rag/compare.go`: collection comparison logic
+- `internal/rag/framework.go`: framework extraction
+- `internal/rag/review.go`: answer review/self-audit
+- `internal/rag/export.go`: session export helpers
+- `internal/qdrant/query.go`: vector query operations
+- `internal/qdrant/worker.go`: worker-pool query dispatch
+- `internal/qdrant/collections.go`: collection/vector introspection
+- `internal/reporter/agent.go`: background report generation
+- `web/app.js`: front-end request wiring and rendering
 
-## Current prompt/rag behavior to preserve
+## API surface
 
-From observed code in `internal/rag/rag.go`:
+- `POST /api/chat`
+- `POST /api/compare`
+- `POST /api/framework`
+- `POST /api/review/last`
+- `POST /api/export/markdown`
+- `POST /api/export/json`
+- `POST /api/report`
+- `GET /api/health`
+- `GET /api/collection`
+- `GET /api/collections`
+- `GET /api/models`
+- `POST /api/model`
 
-- Retrieval signal is inferred from question + retrieved sources:
-  - mode (`knowledge|advisory|creative`)
-  - high-risk synthesis flag
-  - cluster (`faq|narrative|mixed`)
-  - top score, score gap, spread
-  - strictness override from config
-- Prompt rules include:
-  - use only supplied context for factual claims
-  - plain uncertainty when unsupported
-  - bracket citations like `[1]`
-- Engine logs retrieval signal snapshot.
-- Server additionally logs chat debug signal from question + returned sources.
-
-When changing RAG behavior, keep these guarantees unless explicitly asked to change them.
-
-## Environment keys currently used
-
-From `internal/config/config.go`:
+## Environment keys in use
 
 - `APP_PORT`
 - `OPENROUTER_API_KEY`
@@ -142,78 +97,20 @@ From `internal/config/config.go`:
 - `CHAT_HISTORY_TURNS`
 - `CACHE_EMBEDDINGS`
 - `CACHE_QDRANT_RESULTS`
-- `ARCHIMIND_STRICTNESS` (`strict|balanced|exploratory`, default `balanced`)
+- `HYBRID_SEARCH`
+- `ARCHIMIND_STRICTNESS` (`strict|balanced|exploratory`)
 
-## Data contracts / API shape
+## Behavioral constraints to preserve
 
-### `/api/chat`
+- Factual claims should stay grounded in retrieved context.
+- Unsupported claims should be surfaced as uncertainty.
+- Citation format should remain bracket-index style (`[1]`).
+- Retrieval diagnostics/signal logging should remain intact.
 
-- Request JSON:
-  - `session_id` (optional; defaults to `default`)
-  - `message` (required)
-  - `collection` (optional override)
-- Response JSON:
-  - `answer` string
-  - `sources` array of `rag.Source`:
-    - `index`, `score`, `title`, `page`, `chunk`, `source`, `text`
+## Safe edit playbook
 
-### `/api/report`
-
-- Request JSON:
-  - `topic` (required)
-- Response JSON:
-  - `message` (`report generation started`)
-  - `output_path` (relative markdown path under `reports/`)
-- Behavior:
-  - Runs asynchronously in goroutine and logs completion/failure.
-
-### `/api/health`
-
-- Returns status JSON (`status`, `app`).
-
-### `/api/collection`
-
-- Reads optional query param `name`.
-- Returns Qdrant collection info passthrough payload.
-
-## Coding conventions seen in repo
-
-- Keep packages small and focused by domain under `internal/`.
-- Prefer explicit error returns with context (`fmt.Errorf(...)`).
-- HTTP client timeouts are explicit in provider/client constructors.
-- Log with `logger.Printf` for operational visibility.
-- Avoid introducing new third-party dependencies unless needed.
-
-## Gotchas and implementation details
-
-- Chat history expiration is fixed to `24*time.Hour` in `SaveTurn` (not using `REDIS_TTL_SECONDS`).
-- Cache entries for embeddings/Qdrant use `REDIS_TTL_SECONDS`.
-- Qdrant query uses `with_payload=true` and `with_vector=false`.
-- Qdrant query call now accepts an explicit `limit`; chat uses `QDRANT_TOP_K`, reporter uses a higher fixed limit.
-- Named-vector dimension validation happens at startup (`VectorSize`) and again before query result use.
-- If no points are returned, `Ask` returns a fixed fallback sentence and empty sources.
-- `web/app.js` renders source snippets in a `<details>` section; long answers/sources should remain readable plain text.
-
-## Safe edit playbook for future agents
-
-1. Read full target files before editing.
-2. For RAG changes, inspect both:
-   - `internal/rag/rag.go`
-   - `internal/server/server.go` (extra logging/debug signal usage)
-3. For reporter changes, inspect:
-   - `internal/reporter/agent.go`
-   - `internal/server/server.go` (`/api/report` handler)
-4. Keep API response fields backward compatible unless user asks for breaking changes.
-5. Run after each meaningful change:
-
-```bash
-go test ./...
-```
-
-6. Final validation before handoff:
-
-```bash
-gofmt -w .
-go mod tidy
-go build ./...
-```
+1. Read full files before edits.
+2. Keep API responses backward compatible unless requested otherwise.
+3. For shared logic, inspect all call sites before changing signatures.
+4. Run `go test ./...` after each meaningful change.
+5. Before handoff: `gofmt -w .`, `go test ./...`, `go build ./...`.

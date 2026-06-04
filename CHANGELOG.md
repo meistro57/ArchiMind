@@ -1,4 +1,3 @@
-# CHANGELOG.md
 # Changelog
 
 All notable changes to this project will be documented in this file.
@@ -8,10 +7,18 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 ## [Unreleased]
 
 ### Added
-- GitHub Actions CI workflow to validate formatting, run tests, and build the project.
-- New unit tests for configuration parsing and RAG signal/prompt behaviour.
-- Docker helper script to install/start local Qdrant and Redis containers for development.
-- Documentation updates for CI, local infra bootstrap, and release/versioning process.
+- Runtime chat-model switching API: `GET /api/models` and `POST /api/model`.
+- Web model selector that loads available OpenRouter models and switches active chat model live.
+- Assistant response copy-to-clipboard controls in the web UI.
+- Qdrant local worker pool for retrieval jobs (`internal/qdrant/worker.go`).
+- Unit tests for worker pool behavior and OpenRouter embedding fallback parsing.
+
+### Changed
+- `meta_reflections` retrieval now fans out to `mb_chunks`, merges/deduplicates/re-ranks, and caps to `QDRANT_TOP_K`.
+- Reflection points with `reflection_confidence == 0` or `is_empty_reflection == true` are filtered before context assembly.
+- OpenRouter embedding parsing now handles nested/variant response shapes and surfaces provider errors more clearly.
+- Background report worker now uses `google/gemini-2.0-flash-001` as its chat model.
+- Documentation refreshed to reflect API, retrieval, worker, and runtime model-switch behavior.
 
 ## [0.1.0] - 2026-05-05
 

@@ -38,6 +38,7 @@ type Config struct {
 	CacheEmbeddings  bool
 	CacheQdrant      bool
 	Strictness       string
+	HybridSearch     bool
 }
 
 func Load() Config {
@@ -71,6 +72,7 @@ func Load() Config {
 		CacheEmbeddings:  getEnvBool("CACHE_EMBEDDINGS", true),
 		CacheQdrant:      getEnvBool("CACHE_QDRANT_RESULTS", true),
 		Strictness:       strings.ToLower(strings.TrimSpace(getEnv("ARCHIMIND_STRICTNESS", "balanced"))),
+		HybridSearch:     getEnvBool("HYBRID_SEARCH", true),
 	}
 
 	if cfg.OpenRouterAPIKey == "" {

@@ -20,6 +20,7 @@ import (
 type Engine struct {
 	cfg                config.Config
 	qdr                *qdrant.Client
+	qdrWorker          *qdrant.WorkerPool
 	chat               llm.Provider
 	embedder           embed.Provider
 	mem                *memory.RedisMemory
@@ -94,9 +95,15 @@ func NewEngine(
 	logger *log.Logger,
 	expectedVectorSize int,
 ) *Engine {
+	var worker *qdrant.WorkerPool
+	if qdr != nil {
+		worker = qdrant.NewWorkerPool(qdr, 4, 32)
+	}
+
 	return &Engine{
 		cfg:                cfg,
 		qdr:                qdr,
+		qdrWorker:          worker,
 		chat:               chat,
 		embedder:           embedder,
 		mem:                mem,
@@ -105,7 +112,13 @@ func NewEngine(
 	}
 }
 
-func (e *Engine) Ask(ctx context.Context, sessionID string, collection string, question string, requestedMode string) (string, []Source, []Theme, []Contradiction, []SourceInfluence, error) {
+func (e *Engine) Close() {
+	if e.qdrWorker != nil {
+		e.qdrWorker.Close()
+	}
+}
+
+func (e *Engine) Ask(ctx context.Context, sessionID string, collection string, vectorName string, question string, requestedMode string) (string, []Source, []Theme, []Contradiction, []SourceInfluence, error) {
 	_ = e.mem.SaveTurn(ctx, sessionID, "user", question, e.cfg.ChatHistoryTurns)
 
 	vector, err := e.getEmbedding(ctx, question)
@@ -113,9 +126,40 @@ func (e *Engine) Ask(ctx context.Context, sessionID string, collection string, q
 		return "", nil, nil, nil, nil, err
 	}
 
-	points, err := e.getQdrantResults(ctx, collection, question, vector)
+	points, err := e.getQdrantResults(ctx, collection, vectorName, question, vector)
 	if err != nil {
 		return "", nil, nil, nil, nil, err
+	}
+
+	activeCollection := strings.TrimSpace(collection)
+	if activeCollection == "" {
+		activeCollection = e.cfg.QdrantCollection
+	}
+	if activeCollection == "meta_reflections" {
+		primaryCount := len(points)
+		mbChunkPoints, mbErr := e.queryQdrant(ctx, "mb_chunks", "", vector, e.cfg.QdrantTopK)
+		if mbErr != nil {
+			e.logger.Printf("meta_reflections fan-out error: %v", mbErr)
+			mbChunkPoints = nil
+		} else {
+			points = mergeFanoutPoints(points, mbChunkPoints, e.cfg.QdrantTopK)
+		}
+		e.logger.Printf("meta_reflections fan-out: primary=%d mb_chunks=%d merged=%d", primaryCount, len(mbChunkPoints), len(points))
+	}
+
+	// Hybrid re-rank: fuse dense vector results with BM25 lexical ranking.
+	// Particularly effective for the esoteric corpus (Ra Contact, Sefer Yetzirah,
+	// Dolores Cannon, etc.) where exact rare terms are semantically under-weighted.
+	if e.cfg.HybridSearch {
+		corpus := buildBM25Corpus(points)
+		lexHits := bm25Search(corpus, question, e.cfg.QdrantTopK)
+		points = rrfFuse(points, lexHits, e.cfg.QdrantTopK)
+		e.logger.Printf("hybrid search: bm25_hits=%d rrf_fused=%d", len(lexHits), len(points))
+	}
+
+	points, droppedReflectionPoints := filterDeadWeightReflectionPoints(points)
+	if droppedReflectionPoints > 0 {
+		e.logger.Printf("reflection filter: dropped=%d kept=%d", droppedReflectionPoints, len(points))
 	}
 
 	if len(points) == 0 {
@@ -788,24 +832,74 @@ func (e *Engine) getEmbedding(ctx context.Context, question string) ([]float64, 
 	return vector, nil
 }
 
-func (e *Engine) getQdrantResults(ctx context.Context, collection string, question string, vector []float64) ([]qdrant.SearchPoint, error) {
+// resolveVectorName figures out the right vector name for a collection.
+// Priority: explicit request param → .env default → auto-detect from collection info.
+// For collections with exactly one named vector, we use it automatically.
+// For meta_reflections specifically, we default to claims_vec.
+func (e *Engine) resolveVectorName(ctx context.Context, collection string, vectorName string) string {
+	if vectorName != "" {
+		return vectorName
+	}
+	if e.cfg.QdrantVectorName != "" {
+		return e.cfg.QdrantVectorName
+	}
+
+	// Auto-detect: fetch collection info and pick the best vector.
+	info, err := e.qdr.CollectionInfo(ctx, collection)
+	if err != nil || info == nil || len(info.Vectors) == 0 {
+		return ""
+	}
+
+	// Single named vector → use it, no ambiguity.
+	if len(info.Vectors) == 1 {
+		for name := range info.Vectors {
+			if name != "default" {
+				e.logger.Printf("auto-resolved vector name %q for collection %q", name, collection)
+				return name
+			}
+		}
+	}
+
+	// Multiple named vectors: prefer claims_vec (richer for Q&A), then summary_vec.
+	for _, preferred := range []string{"claims_vec", "summary_vec"} {
+		if _, ok := info.Vectors[preferred]; ok {
+			e.logger.Printf("auto-resolved vector name %q for collection %q", preferred, collection)
+			return preferred
+		}
+	}
+
+	// Fall back to first available named vector.
+	for name := range info.Vectors {
+		if name != "default" {
+			e.logger.Printf("auto-resolved vector name %q (fallback) for collection %q", name, collection)
+			return name
+		}
+	}
+
+	return ""
+}
+
+func (e *Engine) getQdrantResults(ctx context.Context, collection string, vectorName string, question string, vector []float64) ([]qdrant.SearchPoint, error) {
 	if collection == "" {
 		collection = e.cfg.QdrantCollection
 	}
+
+	// Resolve effective vector name: request → .env → auto-detect.
+	effectiveVectorName := e.resolveVectorName(ctx, collection, vectorName)
 
 	e.logger.Printf("embedding dimension: %d (provider=%s model=%s)", len(vector), e.cfg.EmbedProvider, e.embedder.ModelName())
 
 	if e.expectedVectorSize > 0 && len(vector) != e.expectedVectorSize {
 		return nil, fmt.Errorf(
 			"embedding dimension mismatch: Qdrant vector %q expects %d, but embedder %q returned %d",
-			e.cfg.QdrantVectorName,
+			effectiveVectorName,
 			e.expectedVectorSize,
 			e.embedder.ModelName(),
 			len(vector),
 		)
 	}
 
-	cacheKey := "qdrant:" + collection + ":" + e.cfg.QdrantVectorName + ":" + e.cfg.EmbedProvider + ":" + e.embedder.ModelName() + ":" + memory.HashKey(question)
+	cacheKey := "qdrant:" + collection + ":" + effectiveVectorName + ":" + e.cfg.EmbedProvider + ":" + e.embedder.ModelName() + ":" + memory.HashKey(question)
 
 	if e.cfg.CacheQdrant {
 		var cached []qdrant.SearchPoint
@@ -815,7 +909,7 @@ func (e *Engine) getQdrantResults(ctx context.Context, collection string, questi
 		}
 	}
 
-	points, err := e.qdr.Query(ctx, collection, vector, e.cfg.QdrantTopK)
+	points, err := e.queryQdrant(ctx, collection, effectiveVectorName, vector, e.cfg.QdrantTopK)
 	if err != nil {
 		return nil, err
 	}
@@ -827,25 +921,249 @@ func (e *Engine) getQdrantResults(ctx context.Context, collection string, questi
 	return points, nil
 }
 
+func (e *Engine) queryQdrant(ctx context.Context, collection string, vectorName string, vector []float64, limit int) ([]qdrant.SearchPoint, error) {
+	if e.qdrWorker != nil {
+		return e.qdrWorker.Query(ctx, collection, vectorName, vector, limit)
+	}
+	return e.qdr.Query(ctx, collection, vectorName, vector, limit)
+}
+
+func mergeFanoutPoints(primary []qdrant.SearchPoint, secondary []qdrant.SearchPoint, limit int) []qdrant.SearchPoint {
+	combined := make([]qdrant.SearchPoint, 0, len(primary)+len(secondary))
+	combined = append(combined, primary...)
+	combined = append(combined, secondary...)
+
+	sort.Slice(combined, func(i, j int) bool {
+		if combined[i].Score == combined[j].Score {
+			return fmt.Sprint(combined[i].ID) < fmt.Sprint(combined[j].ID)
+		}
+		return combined[i].Score > combined[j].Score
+	})
+
+	seen := map[string]struct{}{}
+	merged := make([]qdrant.SearchPoint, 0, len(combined))
+	for _, point := range combined {
+		key := fanoutDedupKey(point)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, point)
+		if limit > 0 && len(merged) >= limit {
+			break
+		}
+	}
+
+	return merged
+}
+
+func fanoutDedupKey(point qdrant.SearchPoint) string {
+	sourceID := firstString(point.Payload, "source_id", "source_file", "source", "file", "filename", "document", "url")
+	chunkIndex := firstString(point.Payload, "chunk_index", "index", "chunk_id", "source_point_id")
+
+	if sourceID == "" {
+		sourceID = fmt.Sprintf("point:%v", point.ID)
+	}
+	if chunkIndex == "" {
+		chunkIndex = fmt.Sprintf("point:%v", point.ID)
+	}
+
+	return sourceID + "|" + chunkIndex
+}
+
+func filterDeadWeightReflectionPoints(points []qdrant.SearchPoint) ([]qdrant.SearchPoint, int) {
+	filtered := make([]qdrant.SearchPoint, 0, len(points))
+	dropped := 0
+
+	for _, point := range points {
+		if !shouldDropReflectionPoint(point.Payload) {
+			filtered = append(filtered, point)
+			continue
+		}
+		dropped++
+	}
+
+	return filtered, dropped
+}
+
+func shouldDropReflectionPoint(payload map[string]any) bool {
+	if !isMBReflectionPayload(payload) {
+		return false
+	}
+
+	if isEmpty, ok := payload["is_empty_reflection"]; ok {
+		switch typed := isEmpty.(type) {
+		case bool:
+			if typed {
+				return true
+			}
+		case string:
+			if strings.EqualFold(strings.TrimSpace(typed), "true") {
+				return true
+			}
+		}
+	}
+
+	if confidence, ok := payload["reflection_confidence"]; ok {
+		if toFloat64(confidence) == 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+func beautifySourceID(s string) string {
+	// dolores_cannon_the_custodians → Dolores Cannon: The Custodians
+	// the_ra_contact_volume_1 → The Ra Contact Volume 1
+	s = strings.ReplaceAll(s, "_", " ")
+	words := strings.Fields(s)
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + strings.ToLower(w[1:])
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+// isMBReflectionPayload detects meta_reflections / meta-bridge payload shape.
+// These points have claims[], concepts[], echoes[], summary, reflection_confidence, tone
+// instead of a raw text field. Treating them as generic text wastes all of that.
+func isMBReflectionPayload(payload map[string]any) bool {
+	_, hasClaims := payload["claims"]
+	_, hasEchoes := payload["echoes"]
+	_, hasSummary := payload["summary"]
+	return hasClaims && hasEchoes && hasSummary
+}
+
+// buildMBReflectionText assembles the full rich context block for a meta-bridge
+// reflection point so the LLM gets claims, concepts, echoes, questions, and summary
+// rather than a blank text field.
+func buildMBReflectionText(payload map[string]any) string {
+	var b strings.Builder
+
+	if summary, ok := payload["summary"].(string); ok && summary != "" {
+		b.WriteString("Summary: ")
+		b.WriteString(summary)
+		b.WriteString("\n\n")
+	}
+
+	if rawClaims, ok := payload["claims"]; ok {
+		claims := toStringSlice(rawClaims)
+		if len(claims) > 0 {
+			b.WriteString("Claims:\n")
+			for _, c := range claims {
+				b.WriteString("  • ")
+				b.WriteString(c)
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	if rawConcepts, ok := payload["concepts"]; ok {
+		concepts := toStringSlice(rawConcepts)
+		if len(concepts) > 0 {
+			b.WriteString("Concepts: ")
+			b.WriteString(strings.Join(concepts, ", "))
+			b.WriteString("\n\n")
+		}
+	}
+
+	if rawEchoes, ok := payload["echoes"]; ok {
+		echoes := toStringSlice(rawEchoes)
+		if len(echoes) > 0 {
+			b.WriteString("Echoes (cross-tradition resonance): ")
+			b.WriteString(strings.Join(echoes, ", "))
+			b.WriteString("\n\n")
+		}
+	}
+
+	if rawQuestions, ok := payload["questions"]; ok {
+		questions := toStringSlice(rawQuestions)
+		if len(questions) > 0 {
+			b.WriteString("Open questions:\n")
+			for _, q := range questions {
+				b.WriteString("  ? ")
+				b.WriteString(q)
+				b.WriteString("\n")
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	if tone, ok := payload["tone"].(string); ok && tone != "" {
+		b.WriteString("Tone: ")
+		b.WriteString(tone)
+		b.WriteString("\n")
+	}
+
+	if conf, ok := payload["reflection_confidence"]; ok {
+		b.WriteString(fmt.Sprintf("Reflection confidence: %.2f\n", toFloat64(conf)))
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+// toStringSlice safely converts any JSON array value ([]any) to []string.
+func toStringSlice(v any) []string {
+	switch typed := v.(type) {
+	case []string:
+		return typed
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if s, ok := item.(string); ok && s != "" {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// toFloat64 safely extracts a float64 from any numeric JSON value.
+func toFloat64(v any) float64 {
+	switch typed := v.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	}
+	return 0
+}
+
 func pointsToSources(points []qdrant.SearchPoint) []Source {
 	sources := make([]Source, 0, len(points))
 
 	for i, point := range points {
 		payload := point.Payload
 
-		text := firstString(payload,
-			"text",
-			"chunk",
-			"content",
-			"page_content",
-			"body",
-			"message",
-			"summary",
-			"claim",
-		)
+		var text string
+		if isMBReflectionPayload(payload) {
+			// meta-bridge reflection: build rich context block from structured fields.
+			text = buildMBReflectionText(payload)
+		} else {
+			text = firstString(payload,
+				"text",
+				"chunk",
+				"content",
+				"page_content",
+				"body",
+				"message",
+				"summary",
+				"claim",
+			)
+		}
 
 		title := firstString(payload,
 			"title",
+			"source_file",
+			"source_id",
 			"source",
 			"file",
 			"filename",
@@ -855,6 +1173,13 @@ func pointsToSources(points []qdrant.SearchPoint) []Source {
 
 		if title == "" {
 			title = fmt.Sprintf("Qdrant point %v", point.ID)
+		} else {
+			title = beautifySourceID(title)
+		}
+
+		// Append chapter if available.
+		if chapter := firstString(payload, "chapter", "chapter_name", "chapter_title"); chapter != "" {
+			title = title + " — " + chapter
 		}
 
 		sources = append(sources, Source{
@@ -863,7 +1188,7 @@ func pointsToSources(points []qdrant.SearchPoint) []Source {
 			Title:  title,
 			Page:   valueString(payload["page"]),
 			Chunk:  valueString(payload["chunk_id"]),
-			Source: firstString(payload, "source", "filename", "file", "url"),
+			Source: firstString(payload, "source_file", "source_id", "source", "filename", "file", "url"),
 			Text:   text,
 		})
 	}

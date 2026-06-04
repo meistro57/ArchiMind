@@ -4,6 +4,7 @@ const input = document.getElementById("messageInput");
 const collectionInput = document.getElementById("collectionInput");
 const compareCollectionInput = document.getElementById("compareCollectionInput");
 const modeInput = document.getElementById("modeInput");
+const modelInput = document.getElementById("modelInput");
 const healthBtn = document.getElementById("healthBtn");
 const collectionBtn = document.getElementById("collectionBtn");
 const reviewBtn = document.getElementById("reviewBtn");
@@ -19,7 +20,239 @@ if (!sessionID) {
   localStorage.setItem("archimind_session_id", sessionID);
 }
 
+const collectionVectors = {}; // name -> [vectorName, ...]
+
+async function loadCollections() {
+  try {
+    const resp = await fetch("/api/collections");
+    const data = await resp.json();
+    const cols = data.collections || [];
+
+    [collectionInput, compareCollectionInput].forEach((sel, i) => {
+      sel.innerHTML = "";
+      const blank = document.createElement("option");
+      blank.value = "";
+      blank.textContent = i === 0 ? ".env default" : "— none —";
+      sel.appendChild(blank);
+      cols.forEach(col => {
+        collectionVectors[col.name] = col.vectors || [];
+        const opt = document.createElement("option");
+        opt.value = col.name;
+        opt.textContent = col.name;
+        sel.appendChild(opt);
+      });
+    });
+  } catch (err) {
+    [collectionInput, compareCollectionInput].forEach(sel => {
+      sel.innerHTML = "<option value=''>Could not load</option>";
+    });
+  }
+}
+
+async function loadModels() {
+  if (!modelInput) return;
+
+  try {
+    const response = await fetch("/api/models");
+    const raw = await response.text();
+    const data = raw ? JSON.parse(raw) : {};
+
+    if (!response.ok) {
+      throw new Error(data.error || "Could not load models");
+    }
+
+    const models = data.models || [];
+    const active = String(data.active || "").trim();
+
+    modelInput.innerHTML = "";
+    models.forEach((model) => {
+      const id = String(model.id || "").trim();
+      if (!id) return;
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = String(model.name || id);
+      modelInput.appendChild(opt);
+    });
+
+    if (active) {
+      const exists = models.some((model) => String(model.id || "").trim() === active);
+      if (!exists) {
+        const opt = document.createElement("option");
+        opt.value = active;
+        opt.textContent = active;
+        modelInput.appendChild(opt);
+      }
+      modelInput.value = active;
+    }
+
+    if (modelInput.options.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "No models available";
+      modelInput.appendChild(opt);
+    }
+  } catch (err) {
+    const fallback = String(modelInput.value || "").trim();
+    modelInput.innerHTML = "";
+    const opt = document.createElement("option");
+    opt.value = fallback;
+    opt.textContent = fallback || "Model list unavailable";
+    modelInput.appendChild(opt);
+  }
+}
+
+loadCollections();
+loadModels();
+
+// ── Preset questions per collection ──────────────────────
+
+const PRESETS = {
+  meta_reflections: [
+    "What recurring concepts connect the Ra Material and Dolores Cannon reflections?",
+    "Where do the Law of One teachings and Nostradamus channelings agree or contradict each other?",
+    "What does this archive say about consciousness, free will, and the nature of spiritual evolution?",
+    "What are the strongest claims about hidden history or suppressed knowledge?",
+    "What echoes connect these esoteric teachings to older philosophical traditions?",
+    "What questions does this archive raise that it cannot definitively answer?",
+    "Summarize the model of reality that emerges across these reflections.",
+    "What does this archive reveal about the relationship between physical health and spiritual service?",
+    "Which source — Ra Material or Dolores Cannon — carries the most weight on the topic of consciousness?",
+    "What patterns appear in the 'echoes' field across reflections — what older traditions keep surfacing?",
+  ],
+  mb_claims: [
+    "What are the most strongly supported claims in this archive?",
+    "What claims about consciousness or reality appear most frequently?",
+    "What contradictions exist between competing claims?",
+    "Which source texts generate the most high-confidence claims?",
+    "What claims relate to hidden history or suppressed knowledge?",
+    "Summarize the worldview that emerges from the strongest claims here.",
+  ],
+  mb_chunks: [
+    "What are the dominant themes across these source texts?",
+    "What passages describe the mechanics of consciousness?",
+    "Where do the source texts agree on the nature of reality?",
+    "What recurring metaphors appear across the archive?",
+    "Summarize the core teachings found in this archive.",
+  ],
+  meistro_brain: [
+    "What dominant themes appear across this knowledge archive?",
+    "What recurring patterns emerge across these conversations?",
+    "What ideas show the most conceptual development over time?",
+    "What are the strongest original insights in this archive?",
+    "What contradictions or unresolved tensions exist here?",
+  ],
+  chatbridge_core: [
+    "What philosophical positions emerge most frequently across these sessions?",
+    "Summarize the key debates from AI-to-AI discussion sessions.",
+    "What consensus — if any — emerged across different AI models?",
+    "What ideas were most challenged or contested in these sessions?",
+    "What original insights appeared that surprised or pushed the discussion forward?",
+  ],
+  vectoreology_findings: [
+    "What topology patterns were detected in the knowledge graph?",
+    "What anomalies or unexpected clusters were found?",
+    "Describe the cluster structure and what it reveals about the archive.",
+    "What are the most isolated concepts in the vector space?",
+    "What cross-domain connections were detected?",
+  ],
+  mb_sources: [
+    "What source materials are represented in this archive?",
+    "Which sources have the most coverage in the collection?",
+    "What is the range of topics covered by the ingested sources?",
+  ],
+};
+
+const DEFAULT_PRESETS = [
+  "What are the strongest recurring themes in this archive?",
+  "What contradictions exist in the retrieved material?",
+  "Summarize the worldview that emerges from this collection.",
+  "What original ideas appear here that don't echo elsewhere?",
+  "What questions does this archive raise but not answer?",
+];
+
+const presetsEl = document.getElementById("presets");
+
+function renderPresets(collectionName) {
+  if (!presetsEl) return;
+  const questions = PRESETS[collectionName] || (collectionName ? DEFAULT_PRESETS : []);
+  presetsEl.innerHTML = "";
+  questions.forEach(q => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "preset-chip";
+    btn.textContent = q;
+    btn.addEventListener("click", () => {
+      input.value = q;
+      input.focus();
+    });
+    presetsEl.appendChild(btn);
+  });
+}
+
+const vectorInput = document.getElementById("vectorInput");
+const vectorLabel = document.getElementById("vectorLabel");
+
+// Preferred vector order for meta-bridge collections.
+// claims_vec carries the full structured reflection (claims, echoes, questions).
+// summary_vec is the compressed view. We prefer claims_vec for Q&A.
+const VECTOR_PREFERENCE = ["claims_vec", "summary_vec"];
+
+function updateVectorSelect(collectionName) {
+  const vectors = collectionVectors[collectionName] || [];
+  vectorInput.innerHTML = "";
+  if (vectors.length === 0) {
+    vectorLabel.style.display = "none";
+    return;
+  }
+  vectorLabel.style.display = "";
+
+  // Sort: preferred vectors first, then alphabetical.
+  const sorted = [...vectors].sort((a, b) => {
+    const ai = VECTOR_PREFERENCE.indexOf(a);
+    const bi = VECTOR_PREFERENCE.indexOf(b);
+    if (ai !== -1 && bi !== -1) return ai - bi;
+    if (ai !== -1) return -1;
+    if (bi !== -1) return 1;
+    return a.localeCompare(b);
+  });
+
+  sorted.forEach((v, i) => {
+    const opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    if (i === 0) opt.selected = true;
+    vectorInput.appendChild(opt);
+  });
+}
+
+collectionInput.addEventListener("change", () => {
+  updateVectorSelect(collectionInput.value);
+  renderPresets(collectionInput.value);
+});
+
+modelInput.addEventListener("change", async () => {
+  const nextModel = modelInput.value.trim();
+  if (!nextModel) return;
+
+  const selectedName = modelInput.options[modelInput.selectedIndex]?.textContent || nextModel;
+
+  try {
+    const data = await postJSON("/api/model", { model: nextModel });
+    if (data.model && data.model !== nextModel) {
+      modelInput.value = data.model;
+    }
+    addMessage("bot", `Model switched to: ${selectedName}`);
+  } catch (err) {
+    addMessage("bot", `Model switch error: ${err.message}`);
+    loadModels();
+  }
+});
+
 function addMessage(role, content, sources = [], themes = [], contradictions = [], diagnostics = null, sourceInfluence = [], strongClaims = []) {
+  // hide the empty state placeholder on first message
+  const empty = chat.querySelector('.chat-empty');
+  if (empty) empty.remove();
+
   const el = document.createElement("div");
   el.className = `message ${role}`;
 
@@ -27,11 +260,30 @@ function addMessage(role, content, sources = [], themes = [], contradictions = [
   label.className = "label";
   label.textContent = role === "user" ? "You" : "ArchiMind";
 
-  const body = document.createElement("div");
-  body.className = "body";
-  body.textContent = content;
+  const header = document.createElement("div");
+  header.className = "message-header";
+  header.appendChild(label);
 
-  el.appendChild(label);
+  if (role === "bot") {
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.className = "message-copy-btn";
+    copyButton.textContent = "Copy";
+    copyButton.addEventListener("click", async () => {
+      const copied = await copyText(buildCopyText(content, sources));
+      copyButton.textContent = copied ? "Copied" : "Failed";
+      setTimeout(() => {
+        copyButton.textContent = "Copy";
+      }, 1200);
+    });
+    header.appendChild(copyButton);
+  }
+
+  const body = document.createElement("div");
+  body.className = "body markdown-body";
+  body.innerHTML = (typeof marked !== 'undefined') ? marked.parse(content) : escapeHtml(content);
+
+  el.appendChild(header);
   el.appendChild(body);
 
   if (themes.length > 0) {
@@ -139,6 +391,44 @@ function addCompareSummary(result) {
   ].join("\n");
 }
 
+function buildCopyText(content, sources) {
+  if (!sources || sources.length === 0) {
+    return String(content || "");
+  }
+
+  const sourceText = sources.map((src) => {
+    const title = src.title || "Source";
+    const score = Number(src.score || 0).toFixed(4);
+    const text = src.text || "";
+    return `[${src.index}] ${title}\nScore: ${score}\n${text}`;
+  }).join("\n\n");
+
+  return `${String(content || "")}\n\nSources (${sources.length})\n${sourceText}`;
+}
+
+async function copyText(text) {
+  const value = String(text || "");
+
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+    }
+  }
+
+  const fallback = document.createElement("textarea");
+  fallback.value = value;
+  fallback.setAttribute("readonly", "");
+  fallback.style.position = "fixed";
+  fallback.style.opacity = "0";
+  document.body.appendChild(fallback);
+  fallback.select();
+  const copied = document.execCommand("copy");
+  fallback.remove();
+  return copied;
+}
+
 function escapeHtml(str) {
   return String(str)
     .replaceAll("&", "&amp;")
@@ -208,6 +498,7 @@ form.addEventListener("submit", async (event) => {
       session_id: sessionID,
       message,
       collection: collectionInput.value.trim(),
+      vector_name: vectorInput.value.trim(),
       mode: modeInput.value,
     });
 
@@ -251,6 +542,7 @@ frameworkBtn.addEventListener("click", async () => {
       session_id: sessionID,
       message,
       collection,
+      vector_name: vectorInput.value.trim(),
     });
 
     loading.remove();
@@ -292,6 +584,7 @@ compareBtn.addEventListener("click", async () => {
       message,
       left_collection: leftCollection,
       right_collection: rightCollection,
+      vector_name: vectorInput.value.trim(),
       mode: modeInput.value,
     });
 
