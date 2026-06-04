@@ -36,6 +36,11 @@ ArchiMind is a Go-based retrieval cockpit for querying Qdrant collections with s
 - Worker pool executes Qdrant query jobs locally (goroutine pool + queue) to reduce request-path stalls.
 
 ## Runtime model switching
+<img width="1074" height="1761" alt="image" src="https://github.com/user-attachments/assets/31d61c90-4fd8-4121-9b27-629910b544cb" />
+
+## Examine Sources used
+
+<img width="1089" height="1774" alt="image" src="https://github.com/user-attachments/assets/0d8f2340-af2a-40e3-9f7a-b13113b36ade" />
 
 - The UI model dropdown loads options from `GET /api/models`.
 - Changing the model calls `POST /api/model` and takes effect on the next chat request.
