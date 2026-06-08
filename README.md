@@ -1,4 +1,5 @@
 # ArchiMind
+<img width="800" height="800" alt="image" src="https://github.com/user-attachments/assets/d2b5f903-e36e-481f-a445-90cb38515b5a" />
 
 ArchiMind is a Go-based retrieval cockpit for querying Qdrant collections with source-cited answers, retrieval diagnostics, and runtime model controls.
 
