@@ -109,6 +109,320 @@ HYBRID_SEARCH=true
 - `GET /api/models`
 - `POST /api/model`
 
+## API usage samples
+
+The examples below assume ArchiMind is running locally at `http://localhost:8090`. Override the base URL with `ARCHIMIND_BASE_URL` when calling a remote instance.
+
+Common request fields:
+
+- `session_id`: Optional conversation key. Defaults to `default` when omitted.
+- `collection`: Optional Qdrant collection override. Defaults to `QDRANT_COLLECTION`.
+- `vector_name`: Optional vector override. Defaults to `QDRANT_VECTOR_NAME`.
+- `mode`: Optional answer mode. Supported common values are `normal`, `skeptical`, `synthesis`, and `diagnostic`.
+
+<details open>
+<summary><strong>Python</strong></summary>
+
+Save as `archimind_api_samples.py`, then run `python3 archimind_api_samples.py`.
+
+```python
+# archimind_api_samples.py
+from __future__ import annotations
+
+import json
+import os
+import sys
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+BASE_URL = os.getenv("ARCHIMIND_BASE_URL", "http://localhost:8090").rstrip("/")
+SESSION_ID = os.getenv("ARCHIMIND_SESSION_ID", "readme-python-demo")
+
+
+def request_json(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Send a JSON request to ArchiMind and return the decoded JSON response."""
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = Request(
+        f"{BASE_URL}{path}",
+        data=body,
+        method=method,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+
+    try:
+        with urlopen(request, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"ArchiMind returned HTTP {exc.code}: {detail}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Could not reach ArchiMind at {BASE_URL}: {exc.reason}") from exc
+
+
+def main() -> int:
+    """Run a small tour of the public API."""
+    try:
+        health = request_json("GET", "/api/health")
+        print(f"Health: {health['status']} ({health['app']} {health['app_version']})")
+
+        chat = request_json(
+            "POST",
+            "/api/chat",
+            {
+                "session_id": SESSION_ID,
+                "message": "Summarise the strongest retrieved evidence in three bullets.",
+                "mode": "normal",
+            },
+        )
+        print("\nAnswer:\n", chat.get("answer", ""))
+        print("\nSources returned:", len(chat.get("sources", [])))
+
+        models = request_json("GET", "/api/models")
+        print("\nActive model:", models.get("active"))
+
+        export_payload = {"session_id": SESSION_ID}
+        export_json = request_json("POST", "/api/export/json", export_payload)
+        print("Exported turns:", len(export_json.get("turns", [])))
+
+        return 0
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+</details>
+
+<details>
+<summary><strong>Go</strong></summary>
+
+Save as `archimind_api_samples.go`, then run `go run archimind_api_samples.go`.
+
+```go
+// archimind_api_samples.go
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+)
+
+var baseURL = strings.TrimRight(getenv("ARCHIMIND_BASE_URL", "http://localhost:8090"), "/")
+var sessionID = getenv("ARCHIMIND_SESSION_ID", "readme-go-demo")
+
+type HealthResponse struct {
+	Status     string `json:"status"`
+	App        string `json:"app"`
+	AppVersion string `json:"app_version"`
+}
+
+type ChatResponse struct {
+	Answer  string `json:"answer"`
+	Sources []any  `json:"sources"`
+}
+
+type ModelsResponse struct {
+	Active string `json:"active"`
+	Models []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"models"`
+}
+
+type ExportResponse struct {
+	SessionID string `json:"session_id"`
+	Turns     []any  `json:"turns"`
+}
+
+func getenv(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func requestJSON[T any](ctx context.Context, client *http.Client, method, path string, payload any) (T, error) {
+	var zero T
+
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return zero, fmt.Errorf("encode request: %w", err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, body)
+	if err != nil {
+		return zero, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return zero, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return zero, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return zero, fmt.Errorf("archimind returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+	}
+
+	if err := json.Unmarshal(responseBody, &zero); err != nil {
+		return zero, fmt.Errorf("decode response: %w", err)
+	}
+	return zero, nil
+}
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	client := &http.Client{Timeout: 60 * time.Second}
+
+	health, err := requestJSON[HealthResponse](ctx, client, http.MethodGet, "/api/health", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Health check failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Health: %s (%s %s)\n", health.Status, health.App, health.AppVersion)
+
+	chat, err := requestJSON[ChatResponse](ctx, client, http.MethodPost, "/api/chat", map[string]string{
+		"session_id": sessionID,
+		"message":    "Summarise the strongest retrieved evidence in three bullets.",
+		"mode":       "normal",
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Chat request failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("\nAnswer:\n%s\n\nSources returned: %d\n", chat.Answer, len(chat.Sources))
+
+	models, err := requestJSON[ModelsResponse](ctx, client, http.MethodGet, "/api/models", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Model lookup failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("\nActive model: %s\n", models.Active)
+
+	exportResponse, err := requestJSON[ExportResponse](ctx, client, http.MethodPost, "/api/export/json", map[string]string{
+		"session_id": sessionID,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Export failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Exported turns: %d\n", len(exportResponse.Turns))
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Node</strong></summary>
+
+Save as `archimind_api_samples.mjs`, then run `node archimind_api_samples.mjs` with Node.js 20+.
+
+```javascript
+// archimind_api_samples.mjs
+const baseUrl = (process.env.ARCHIMIND_BASE_URL ?? "http://localhost:8090").replace(/\/$/, "");
+const sessionId = process.env.ARCHIMIND_SESSION_ID ?? "readme-node-demo";
+
+async function requestJson(method, path, payload = undefined) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      Accept: "application/json",
+      ...(payload === undefined ? {} : { "Content-Type": "application/json" }),
+    },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`ArchiMind returned HTTP ${response.status}: ${text}`);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Could not parse JSON response: ${error.message}`);
+  }
+}
+
+async function main() {
+  const health = await requestJson("GET", "/api/health");
+  console.log(`Health: ${health.status} (${health.app} ${health.app_version})`);
+
+  const chat = await requestJson("POST", "/api/chat", {
+    session_id: sessionId,
+    message: "Summarise the strongest retrieved evidence in three bullets.",
+    mode: "normal",
+  });
+  console.log("\nAnswer:\n", chat.answer ?? "");
+  console.log("\nSources returned:", Array.isArray(chat.sources) ? chat.sources.length : 0);
+
+  const models = await requestJson("GET", "/api/models");
+  console.log("\nActive model:", models.active);
+
+  const exported = await requestJson("POST", "/api/export/json", { session_id: sessionId });
+  console.log("Exported turns:", Array.isArray(exported.turns) ? exported.turns.length : 0);
+}
+
+main().catch((error) => {
+  console.error(`Error: ${error.message}`);
+  process.exitCode = 1;
+});
+```
+
+</details>
+
+Additional endpoint examples:
+
+```bash
+# Health check
+curl -s http://localhost:8090/api/health
+
+# Compare two collections
+curl -s http://localhost:8090/api/compare \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"demo","message":"Where do these collections agree and disagree?","left_collection":"meta_reflections","right_collection":"mb_chunks","mode":"synthesis"}'
+
+# Extract a framework from retrieved evidence
+curl -s http://localhost:8090/api/framework \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"demo","message":"Extract a practical decision framework from this topic."}'
+
+# Start a background report
+curl -s http://localhost:8090/api/report \
+  -H 'Content-Type: application/json' \
+  -d '{"topic":"retrieval quality risks"}'
+
+# Switch the active chat model for future requests
+curl -s http://localhost:8090/api/model \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"deepseek/deepseek-r1"}'
+```
+
 ## Development commands
 
 ```bash
