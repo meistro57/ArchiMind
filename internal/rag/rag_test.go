@@ -2,13 +2,32 @@
 package rag
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"archimind/internal/config"
 	"archimind/internal/memory"
 	"archimind/internal/qdrant"
 )
+
+type stubEmbedder struct {
+	model string
+}
+
+func (s stubEmbedder) Embed(_ context.Context, _ string) ([]float64, error) {
+	return []float64{0.1, 0.2}, nil
+}
+
+func (s stubEmbedder) ModelName() string {
+	return s.model
+}
 
 func TestInferAnswerMode(t *testing.T) {
 	tests := []struct {
@@ -359,6 +378,92 @@ func TestFilterDeadWeightReflectionPoints(t *testing.T) {
 	}
 	if filtered[0].ID != "keep-chunk" || filtered[1].ID != "keep-reflection" {
 		t.Fatalf("unexpected filtered order/ids: got %v then %v", filtered[0].ID, filtered[1].ID)
+	}
+}
+
+func TestGetQdrantResultsAutoResolvesVectorForCollection(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/collections/mb_chunks":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"result": map[string]any{
+					"config": map[string]any{
+						"params": map[string]any{
+							"vectors": map[string]any{"size": 3072, "distance": "Cosine"},
+						},
+					},
+				},
+			})
+		case "/collections/mb_chunks/points/query":
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if strings.Contains(string(raw), "\"using\"") {
+				t.Fatalf("query payload should not include using for default vector: %s", string(raw))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"result": map[string]any{
+					"points": []map[string]any{{"id": 1, "score": 0.9, "payload": map[string]any{"text": "ok"}}},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	})
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	engine := &Engine{
+		cfg:      config.Config{QdrantURL: ts.URL, QdrantCollection: "meta_reflections", QdrantVectorName: "claims_vec", QdrantTopK: 3},
+		qdr:      qdrant.NewClient(config.Config{QdrantURL: ts.URL, QdrantCollection: "meta_reflections", QdrantVectorName: "claims_vec", QdrantTopK: 3}),
+		embedder: stubEmbedder{model: "test-embed"},
+		logger:   log.New(io.Discard, "", 0),
+	}
+
+	vector := make([]float64, 3072)
+	points, err := engine.getQdrantResults(context.Background(), "mb_chunks", "", "hello", vector)
+	if err != nil {
+		t.Fatalf("getQdrantResults() error = %v", err)
+	}
+	if len(points) != 1 {
+		t.Fatalf("getQdrantResults() len = %d, want 1", len(points))
+	}
+}
+
+func TestGetQdrantResultsReturnsDimensionMismatchForCollection(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/collections/mb_chunks" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"result": map[string]any{
+				"config": map[string]any{
+					"params": map[string]any{
+						"vectors": map[string]any{"size": 3072, "distance": "Cosine"},
+					},
+				},
+			},
+		})
+	})
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	engine := &Engine{
+		cfg:      config.Config{QdrantURL: ts.URL, QdrantCollection: "meta_reflections", QdrantVectorName: "claims_vec", QdrantTopK: 3},
+		qdr:      qdrant.NewClient(config.Config{QdrantURL: ts.URL, QdrantCollection: "meta_reflections", QdrantVectorName: "claims_vec", QdrantTopK: 3}),
+		embedder: stubEmbedder{model: "test-embed"},
+		logger:   log.New(io.Discard, "", 0),
+	}
+
+	_, err := engine.getQdrantResults(context.Background(), "mb_chunks", "", "hello", []float64{0.1, 0.2})
+	if err == nil {
+		t.Fatal("getQdrantResults() expected error")
+	}
+	if !strings.Contains(err.Error(), "expects 3072 dimensions") || !strings.Contains(err.Error(), "returned 2") {
+		t.Fatalf("unexpected error message: %v", err)
 	}
 }
 

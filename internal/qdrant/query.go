@@ -8,12 +8,31 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type SearchPoint struct {
 	ID      any            `json:"id"`
 	Score   float64        `json:"score"`
 	Payload map[string]any `json:"payload"`
+}
+
+type HTTPError struct {
+	StatusCode int
+	URL        string
+	Detail     string
+	RawBody    string
+}
+
+func (e *HTTPError) Error() string {
+	detail := strings.TrimSpace(e.Detail)
+	if detail == "" {
+		detail = strings.TrimSpace(e.RawBody)
+	}
+	if detail == "" {
+		detail = "no error details returned"
+	}
+	return fmt.Sprintf("qdrant returned HTTP %d: %s", e.StatusCode, detail)
 }
 
 type queryRequest struct {
@@ -44,10 +63,6 @@ func (c *Client) Query(ctx context.Context, collection string, vectorName string
 		limit = c.cfg.QdrantTopK
 	}
 
-	if vectorName == "" {
-		vectorName = c.cfg.QdrantVectorName
-	}
-
 	queryBody := queryRequest{
 		Query:       vector,
 		Using:       vectorName,
@@ -67,7 +82,7 @@ func (c *Client) Query(ctx context.Context, collection string, vectorName string
 	}
 
 	if statusCode != http.StatusNotFound && statusCode != http.StatusMethodNotAllowed {
-		return nil, fmt.Errorf("qdrant returned HTTP %d: %s", statusCode, string(respBody))
+		return nil, newHTTPError(statusCode, queryURL, respBody)
 	}
 
 	searchVector := any(vector)
@@ -92,10 +107,80 @@ func (c *Client) Query(ctx context.Context, collection string, vectorName string
 	}
 
 	if statusCode < 200 || statusCode >= 300 {
-		return nil, fmt.Errorf("qdrant returned HTTP %d: %s", statusCode, string(respBody))
+		return nil, newHTTPError(statusCode, searchURL, respBody)
 	}
 
 	return parseSearchPoints(respBody)
+}
+
+func newHTTPError(statusCode int, requestURL string, respBody []byte) error {
+	raw := strings.TrimSpace(string(respBody))
+	return &HTTPError{
+		StatusCode: statusCode,
+		URL:        requestURL,
+		Detail:     extractQdrantErrorDetail(respBody),
+		RawBody:    raw,
+	}
+}
+
+func extractQdrantErrorDetail(respBody []byte) string {
+	trimmed := strings.TrimSpace(string(respBody))
+	if trimmed == "" {
+		return ""
+	}
+
+	var envelope struct {
+		Status any `json:"status"`
+		Result any `json:"result"`
+		Error  any `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return trimmed
+	}
+
+	if detail := jsonValueString(envelope.Error); detail != "" {
+		return detail
+	}
+	if detail := extractStatusDetail(envelope.Status); detail != "" {
+		return detail
+	}
+	if detail := jsonValueString(envelope.Result); detail != "" {
+		return detail
+	}
+	return trimmed
+}
+
+func extractStatusDetail(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]any:
+		if detail := jsonValueString(typed["error"]); detail != "" {
+			return detail
+		}
+		if detail := jsonValueString(typed["message"]); detail != "" {
+			return detail
+		}
+		if detail := jsonValueString(typed["reason"]); detail != "" {
+			return detail
+		}
+	}
+	return ""
+}
+
+func jsonValueString(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(raw))
+	}
 }
 
 func (c *Client) postQdrantJSON(ctx context.Context, requestURL string, body any) (int, []byte, error) {

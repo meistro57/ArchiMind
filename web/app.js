@@ -524,12 +524,13 @@ frameworkBtn.addEventListener("click", async () => {
   const message = input.value.trim();
   const collection = collectionInput.value.trim();
 
-  if (!message || !collection) {
-    addMessage("bot", "Framework needs message and collection.");
+  if (!message) {
+    addMessage("bot", "Framework needs a message.");
     return;
   }
 
-  addMessage("user", `Framework from ${collection}: ${message}`);
+  const collectionLabel = collection || ".env default";
+  addMessage("user", `Framework from ${collectionLabel}: ${message}`);
 
   const loading = document.createElement("div");
   loading.className = "message bot loading";

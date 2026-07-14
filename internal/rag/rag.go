@@ -18,14 +18,13 @@ import (
 )
 
 type Engine struct {
-	cfg                config.Config
-	qdr                *qdrant.Client
-	qdrWorker          *qdrant.WorkerPool
-	chat               llm.Provider
-	embedder           embed.Provider
-	mem                *memory.RedisMemory
-	logger             *log.Logger
-	expectedVectorSize int
+	cfg       config.Config
+	qdr       *qdrant.Client
+	qdrWorker *qdrant.WorkerPool
+	chat      llm.Provider
+	embedder  embed.Provider
+	mem       *memory.RedisMemory
+	logger    *log.Logger
 }
 
 type Source struct {
@@ -93,7 +92,6 @@ func NewEngine(
 	embedder embed.Provider,
 	mem *memory.RedisMemory,
 	logger *log.Logger,
-	expectedVectorSize int,
 ) *Engine {
 	var worker *qdrant.WorkerPool
 	if qdr != nil {
@@ -101,14 +99,13 @@ func NewEngine(
 	}
 
 	return &Engine{
-		cfg:                cfg,
-		qdr:                qdr,
-		qdrWorker:          worker,
-		chat:               chat,
-		embedder:           embedder,
-		mem:                mem,
-		logger:             logger,
-		expectedVectorSize: expectedVectorSize,
+		cfg:       cfg,
+		qdr:       qdr,
+		qdrWorker: worker,
+		chat:      chat,
+		embedder:  embedder,
+		mem:       mem,
+		logger:    logger,
 	}
 }
 
@@ -137,7 +134,7 @@ func (e *Engine) Ask(ctx context.Context, sessionID string, collection string, v
 	}
 	if activeCollection == "meta_reflections" {
 		primaryCount := len(points)
-		mbChunkPoints, mbErr := e.queryQdrant(ctx, "mb_chunks", "", vector, e.cfg.QdrantTopK)
+		mbChunkPoints, mbErr := e.getQdrantResults(ctx, "mb_chunks", "", question, vector)
 		if mbErr != nil {
 			e.logger.Printf("meta_reflections fan-out error: %v", mbErr)
 			mbChunkPoints = nil
@@ -832,51 +829,65 @@ func (e *Engine) getEmbedding(ctx context.Context, question string) ([]float64, 
 	return vector, nil
 }
 
-// resolveVectorName figures out the right vector name for a collection.
-// Priority: explicit request param → .env default → auto-detect from collection info.
-// For collections with exactly one named vector, we use it automatically.
-// For meta_reflections specifically, we default to claims_vec.
-func (e *Engine) resolveVectorName(ctx context.Context, collection string, vectorName string) string {
-	if vectorName != "" {
-		return vectorName
-	}
-	if e.cfg.QdrantVectorName != "" {
-		return e.cfg.QdrantVectorName
-	}
-
-	// Auto-detect: fetch collection info and pick the best vector.
-	info, err := e.qdr.CollectionInfo(ctx, collection)
-	if err != nil || info == nil || len(info.Vectors) == 0 {
+func chooseCollectionVectorName(vectors map[string]qdrant.CollectionVector) string {
+	if len(vectors) == 0 {
 		return ""
 	}
-
-	// Single named vector → use it, no ambiguity.
-	if len(info.Vectors) == 1 {
-		for name := range info.Vectors {
-			if name != "default" {
-				e.logger.Printf("auto-resolved vector name %q for collection %q", name, collection)
-				return name
+	if len(vectors) == 1 {
+		for name := range vectors {
+			if name == "default" {
+				return ""
 			}
-		}
-	}
-
-	// Multiple named vectors: prefer claims_vec (richer for Q&A), then summary_vec.
-	for _, preferred := range []string{"claims_vec", "summary_vec"} {
-		if _, ok := info.Vectors[preferred]; ok {
-			e.logger.Printf("auto-resolved vector name %q for collection %q", preferred, collection)
-			return preferred
-		}
-	}
-
-	// Fall back to first available named vector.
-	for name := range info.Vectors {
-		if name != "default" {
-			e.logger.Printf("auto-resolved vector name %q (fallback) for collection %q", name, collection)
 			return name
 		}
 	}
-
+	for _, preferred := range []string{"claims_vec", "summary_vec"} {
+		if _, ok := vectors[preferred]; ok {
+			return preferred
+		}
+	}
+	for name := range vectors {
+		if name != "default" {
+			return name
+		}
+	}
 	return ""
+}
+
+func (e *Engine) resolveCollectionVectorSpec(ctx context.Context, collection string, vectorName string) (string, int, error) {
+	info, err := e.qdr.CollectionInfo(ctx, collection)
+	if err != nil {
+		return "", 0, err
+	}
+	if info == nil || len(info.Vectors) == 0 {
+		return "", 0, fmt.Errorf("collection %q has no vector configuration", collection)
+	}
+
+	requestedVectorName := strings.TrimSpace(vectorName)
+	if requestedVectorName == "" {
+		configuredVectorName := strings.TrimSpace(e.cfg.QdrantVectorName)
+		if configuredVectorName != "" {
+			if _, ok := info.Vectors[configuredVectorName]; ok {
+				requestedVectorName = configuredVectorName
+			} else {
+				e.logger.Printf("configured vector %q not found in collection %q, auto-resolving", configuredVectorName, collection)
+			}
+		}
+	}
+	if requestedVectorName == "" {
+		requestedVectorName = chooseCollectionVectorName(info.Vectors)
+		e.logger.Printf("auto-resolved vector name %q for collection %q", requestedVectorName, collection)
+	}
+
+	lookupName := requestedVectorName
+	if lookupName == "" {
+		lookupName = "default"
+	}
+	vectorConfig, found := info.Vectors[lookupName]
+	if !found {
+		return "", 0, fmt.Errorf("vector %q not found in collection %q", requestedVectorName, collection)
+	}
+	return requestedVectorName, vectorConfig.Size, nil
 }
 
 func (e *Engine) getQdrantResults(ctx context.Context, collection string, vectorName string, question string, vector []float64) ([]qdrant.SearchPoint, error) {
@@ -884,16 +895,23 @@ func (e *Engine) getQdrantResults(ctx context.Context, collection string, vector
 		collection = e.cfg.QdrantCollection
 	}
 
-	// Resolve effective vector name: request → .env → auto-detect.
-	effectiveVectorName := e.resolveVectorName(ctx, collection, vectorName)
+	effectiveVectorName, expectedVectorSize, err := e.resolveCollectionVectorSpec(ctx, collection, vectorName)
+	if err != nil {
+		return nil, err
+	}
 
-	e.logger.Printf("embedding dimension: %d (provider=%s model=%s)", len(vector), e.cfg.EmbedProvider, e.embedder.ModelName())
+	e.logger.Printf("embedding dimension: %d (provider=%s model=%s collection=%s vector=%s expected=%d)", len(vector), e.cfg.EmbedProvider, e.embedder.ModelName(), collection, effectiveVectorName, expectedVectorSize)
 
-	if e.expectedVectorSize > 0 && len(vector) != e.expectedVectorSize {
+	if expectedVectorSize > 0 && len(vector) != expectedVectorSize {
+		resolvedVectorName := effectiveVectorName
+		if resolvedVectorName == "" {
+			resolvedVectorName = "default"
+		}
 		return nil, fmt.Errorf(
-			"embedding dimension mismatch: Qdrant vector %q expects %d, but embedder %q returned %d",
-			effectiveVectorName,
-			e.expectedVectorSize,
+			"embedding dimension mismatch: collection %q vector %q expects %d dimensions, but embedder %q returned %d",
+			collection,
+			resolvedVectorName,
+			expectedVectorSize,
 			e.embedder.ModelName(),
 			len(vector),
 		)

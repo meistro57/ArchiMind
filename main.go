@@ -50,19 +50,6 @@ func main() {
 	logger.Printf("Qdrant vector name : %s", cfg.QdrantVectorName)
 	logger.Printf("Prompt strictness  : %s", cfg.Strictness)
 
-	expectedVectorSize := 0
-	if cfg.QdrantCollection != "" && cfg.QdrantVectorName != "" {
-		startCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		dim, err := qdrantClient.VectorSize(startCtx, cfg.QdrantCollection, cfg.QdrantVectorName)
-		cancel()
-		if err != nil {
-			logger.Printf("Could not fetch Qdrant vector size (dimension check skipped): %v", err)
-		} else {
-			expectedVectorSize = dim
-			logger.Printf("Qdrant vector '%s' expects dimension: %d", cfg.QdrantVectorName, dim)
-		}
-	}
-
 	ragEngine := rag.NewEngine(
 		cfg,
 		qdrantClient,
@@ -70,7 +57,6 @@ func main() {
 		embedder,
 		redisMemory,
 		logger,
-		expectedVectorSize,
 	)
 
 	appServer := server.New(cfg, ragEngine, qdrantClient, chatProvider, redisMemory, logger)

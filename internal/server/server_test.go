@@ -50,6 +50,7 @@ func TestClassifyChatError(t *testing.T) {
 		code string
 	}{
 		{name: "dimension mismatch", err: errors.New("embedding dimension mismatch: expected 1536 got 1024"), code: "embedding_dimension_mismatch"},
+		{name: "qdrant dimension mismatch", err: errors.New("qdrant returned HTTP 400: Wrong input: expected dim: 3072, got 1536"), code: "embedding_dimension_mismatch"},
 		{name: "collection missing", err: errors.New("qdrant collection is missing"), code: "collection_missing"},
 		{name: "vector missing", err: errors.New("vector \"claims_vec\" not found in collection \"docs\""), code: "vector_not_found"},
 		{name: "http error", err: errors.New("qdrant returned HTTP 401: unauthorized"), code: "qdrant_http_error"},
@@ -68,6 +69,27 @@ func TestClassifyChatError(t *testing.T) {
 			}
 			if diagnostic.Hint == "" {
 				t.Fatal("classifyChatError() hint should not be empty")
+			}
+		})
+	}
+}
+
+func TestChatErrorStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		diag chatErrorDiagnostic
+		want int
+	}{
+		{name: "dimension mismatch", diag: chatErrorDiagnostic{Code: "embedding_dimension_mismatch"}, want: 400},
+		{name: "vector missing", diag: chatErrorDiagnostic{Code: "vector_not_found"}, want: 400},
+		{name: "collection missing", diag: chatErrorDiagnostic{Code: "collection_missing"}, want: 400},
+		{name: "http error", diag: chatErrorDiagnostic{Code: "qdrant_http_error"}, want: 500},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := chatErrorStatus(tt.diag); got != tt.want {
+				t.Fatalf("chatErrorStatus() = %d, want %d", got, tt.want)
 			}
 		})
 	}

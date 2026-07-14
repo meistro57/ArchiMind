@@ -117,8 +117,9 @@ Common request fields:
 
 - `session_id`: Optional conversation key. Defaults to `default` when omitted.
 - `collection`: Optional Qdrant collection override. Defaults to `QDRANT_COLLECTION`.
-- `vector_name`: Optional vector override. Defaults to `QDRANT_VECTOR_NAME`.
+- `vector_name`: Optional vector override. If omitted, ArchiMind resolves the best available vector for the selected collection.
 - `mode`: Optional answer mode. Supported common values are `normal`, `skeptical`, `synthesis`, and `diagnostic`.
+- Dimension/vector mismatches now return HTTP 400 with structured mismatch details instead of a generic connectivity hint.
 
 <details open>
 <summary><strong>Python</strong></summary>

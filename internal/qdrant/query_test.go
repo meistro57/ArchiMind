@@ -39,7 +39,7 @@ func TestQueryUsesPointsQueryEndpoint(t *testing.T) {
 	defer ts.Close()
 
 	c := NewClient(config.Config{QdrantURL: ts.URL, QdrantVectorName: "claims_vec", QdrantTopK: 3})
-	points, err := c.Query(context.Background(), "demo", "", []float64{0.1, 0.2}, 0)
+	points, err := c.Query(context.Background(), "demo", "claims_vec", []float64{0.1, 0.2}, 0)
 	if err != nil {
 		t.Fatalf("Query() error = %v", err)
 	}
@@ -99,5 +99,32 @@ func TestQueryFallsBackToSearchEndpoint(t *testing.T) {
 	}
 	if len(points) != 1 {
 		t.Fatalf("Query() len = %d, want 1", len(points))
+	}
+}
+
+func TestQueryReturnsStructuredHTTPError(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"status":{"error":"Wrong input: expected dim: 3072, got 1536"}}`))
+	})
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	c := NewClient(config.Config{QdrantURL: ts.URL, QdrantTopK: 5})
+	_, err := c.Query(context.Background(), "demo", "claims_vec", []float64{0.4, 0.5}, 2)
+	if err == nil {
+		t.Fatal("Query() expected error")
+	}
+
+	httpErr, ok := err.(*HTTPError)
+	if !ok {
+		t.Fatalf("Query() error type = %T, want *HTTPError", err)
+	}
+	if httpErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want %d", httpErr.StatusCode, http.StatusBadRequest)
+	}
+	if httpErr.Detail != "Wrong input: expected dim: 3072, got 1536" {
+		t.Fatalf("detail = %q", httpErr.Detail)
 	}
 }

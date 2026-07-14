@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -69,13 +70,23 @@ func (c *Client) CollectionInfo(ctx context.Context, collection string) (*Collec
 	}
 	defer resp.Body.Close()
 
-	var raw any
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return nil, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("qdrant collection info returned HTTP %d", resp.StatusCode)
+		return nil, &HTTPError{
+			StatusCode: resp.StatusCode,
+			URL:        url,
+			Detail:     extractQdrantErrorDetail(respBody),
+			RawBody:    string(respBody),
+		}
+	}
+
+	var raw any
+	if err := json.Unmarshal(respBody, &raw); err != nil {
+		return nil, err
 	}
 
 	vectors := parseVectors(raw)

@@ -212,12 +212,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.logger.Printf("chat error: %v", err)
 		diag := classifyChatError(err)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		w.WriteHeader(chatErrorStatus(diag))
+		payload := map[string]any{
 			"error": diag.Error,
 			"code":  diag.Code,
 			"hint":  diag.Hint,
-		})
+		}
+		if len(diag.Details) > 0 {
+			payload["details"] = diag.Details
+		}
+		_ = json.NewEncoder(w).Encode(payload)
 		return
 	}
 
@@ -275,12 +279,16 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 		s.logger.Printf("compare error: %v", err)
 		diag := classifyChatError(err)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		w.WriteHeader(chatErrorStatus(diag))
+		payload := map[string]any{
 			"error": diag.Error,
 			"code":  diag.Code,
 			"hint":  diag.Hint,
-		})
+		}
+		if len(diag.Details) > 0 {
+			payload["details"] = diag.Details
+		}
+		_ = json.NewEncoder(w).Encode(payload)
 		return
 	}
 
@@ -752,9 +760,10 @@ func cfgStrictness(value string) string {
 }
 
 type chatErrorDiagnostic struct {
-	Error string
-	Code  string
-	Hint  string
+	Error   string
+	Code    string
+	Hint    string
+	Details map[string]any
 }
 
 func classifyChatError(err error) chatErrorDiagnostic {
@@ -767,22 +776,42 @@ func classifyChatError(err error) chatErrorDiagnostic {
 	}
 
 	switch {
-	case strings.Contains(message, "embedding dimension mismatch"):
-		diagnostic.Error = "embedding and collection vector dimensions do not match"
+	case strings.Contains(message, "embedding dimension mismatch"),
+		(strings.Contains(message, "expected dim") && strings.Contains(message, "got")):
+		diagnostic.Error = strings.TrimSpace(err.Error())
 		diagnostic.Code = "embedding_dimension_mismatch"
-		diagnostic.Hint = "Verify QDRANT_VECTOR_NAME and selected embedding model dimensions."
+		diagnostic.Hint = "Switch to an embedding model that matches the selected collection vector dimensions."
+		var qdrErr *qdrant.HTTPError
+		if errors.As(err, &qdrErr) {
+			diagnostic.Details = map[string]any{
+				"status_code": qdrErr.StatusCode,
+				"detail":      qdrErr.Detail,
+				"endpoint":    qdrErr.URL,
+			}
+		}
 	case strings.Contains(message, "qdrant collection is missing"):
 		diagnostic.Error = "qdrant collection is missing"
 		diagnostic.Code = "collection_missing"
 		diagnostic.Hint = "Set QDRANT_COLLECTION or pass collection in /api/chat request."
 	case strings.Contains(message, "vector") && strings.Contains(message, "not found in collection"):
-		diagnostic.Error = "configured vector name was not found in collection"
+		diagnostic.Error = strings.TrimSpace(err.Error())
 		diagnostic.Code = "vector_not_found"
-		diagnostic.Hint = "Update QDRANT_VECTOR_NAME to an existing vector in the target collection."
+		diagnostic.Hint = "Select an existing vector for the target collection, or leave vector_name empty to auto-resolve."
 	case strings.Contains(message, "qdrant returned http") || strings.Contains(message, "qdrant collection info returned http"):
-		diagnostic.Error = "qdrant request returned non-success status"
+		diagnostic.Error = strings.TrimSpace(err.Error())
 		diagnostic.Code = "qdrant_http_error"
-		diagnostic.Hint = "Validate QDRANT_URL, QDRANT_API_KEY, and collection name permissions."
+		diagnostic.Hint = "Qdrant rejected the request; inspect details for HTTP status and Qdrant error message."
+		var qdrErr *qdrant.HTTPError
+		if errors.As(err, &qdrErr) {
+			diagnostic.Details = map[string]any{
+				"status_code": qdrErr.StatusCode,
+				"detail":      qdrErr.Detail,
+				"endpoint":    qdrErr.URL,
+			}
+			if qdrErr.StatusCode == http.StatusUnauthorized || qdrErr.StatusCode == http.StatusForbidden {
+				diagnostic.Hint = "Validate QDRANT_URL, QDRANT_API_KEY, and collection permissions."
+			}
+		}
 	case strings.Contains(message, "could not parse qdrant response"):
 		diagnostic.Error = "qdrant response could not be parsed"
 		diagnostic.Code = "qdrant_parse_error"
@@ -790,6 +819,15 @@ func classifyChatError(err error) chatErrorDiagnostic {
 	}
 
 	return diagnostic
+}
+
+func chatErrorStatus(diag chatErrorDiagnostic) int {
+	switch diag.Code {
+	case "embedding_dimension_mismatch", "vector_not_found", "collection_missing":
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 func withBasicMiddleware(next http.Handler) http.Handler {
